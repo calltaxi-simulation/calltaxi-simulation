@@ -1,6 +1,5 @@
-# 데이터 (oracle/data/ 에 별도 보관 — 저장소에 올리지 않음)
-# simulation/ 이 저장소 루트이므로 상위 data/ 는 자동 제외됨.
-# 혹시 simulation 내부에 데이터를 두면 아래로 제외:
+# 데이터 (저장소 밖에 별도 보관 — 대용량이라 올리지 않음)
+# simulation 내부에 데이터를 두면 아래로 제외:
 data/
 *.csv
 *.geojson
