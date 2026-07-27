@@ -50,7 +50,7 @@ def equity(log: pd.DataFrame) -> dict:
 def dong_wait_table(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
                     gu_col: str = "origin_gu", dong_col: str = "origin_dong",
                     wait_col: str = "wait_min") -> pd.DataFrame:
-    """동별 평균대기·콜수 집계표. 콜수 min_calls 미만 동은 제외(D-04).
+    """동별 평균대기·콜수 집계표. 콜수 min_calls 미만 동은 제외.
 
     취소 건은 wait 이 NaN 이라 평균에서 빠지지만 콜수에는 잡히면 안 된다.
     여기서 말하는 '건수'는 대기시간이 산출된 건(=승차 완료) 기준이다.
@@ -74,7 +74,7 @@ def dong_wait_table(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
 
 def dong_gini(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
               weighted: bool = False, **kw) -> float:
-    """동간 대기시간 지니(D-04 적용, **동 균등가중**). 관문 C 타깃 0.095.
+    """동간 대기시간 지니(**동 균등가중**). 관문 C 타깃 0.095.
 
     형평을 '동 간 격차'로 정의하므로 각 동을 한 표로 세는 균등가중이 정본이다.
     콜수로 가중하면 콜이 많은 동이 지표를 지배해 정작 소외된 동의 격차가 묻힌다.
@@ -82,8 +82,7 @@ def dong_gini(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
     (0.0947)이라 정의와 실측이 맞아떨어진다.
 
     weighted=True 로 콜수 가중(0.1013)도 뽑을 수 있게 남겨뒀다 — 참고용이며
-    관문 C 채점에는 쓰지 않는다. ASSA D-04 문구에 '콜수 가중'이라 적힌 것은
-    오기이고, 여기 정의가 정본이다.
+    관문 C 채점에는 쓰지 않는다. 
     """
     tbl = dong_wait_table(log, min_calls=min_calls, **kw)
     return gini(tbl["mean_wait"], weights=tbl["n_calls"] if weighted else None)
