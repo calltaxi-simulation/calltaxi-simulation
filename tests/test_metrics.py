@@ -135,10 +135,10 @@ def test_dong_means_match_original_analysis(calls, data_dir):
 
 @pytest.mark.slow
 def test_gini_reproduces_target(calls):
-    """관문 C 타깃 0.095 는 균등가중 기준으로 재현된다(README † 각주)."""
+    """관문 C 타깃 0.095 는 정본인 동 균등가중으로 재현된다(README † 각주)."""
     assert metrics.dong_gini(calls) == pytest.approx(
         metrics.TARGETS["gini_dong"], abs=0.002)
-    # 콜수 가중은 다른 값이 나온다 — 정의가 갈린다는 사실 자체를 고정해 둔다
+    # 콜수 가중(참고용, 채점 대상 아님)은 다른 값이라는 사실을 고정해 둔다
     assert metrics.dong_gini(calls, weighted=True) == pytest.approx(0.101, abs=0.002)
 
 

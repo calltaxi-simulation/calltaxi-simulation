@@ -12,7 +12,7 @@ import pandas as pd
 # 분모가 지표마다 다르다 — 대조할 때 헷갈리기 쉬우니 명시해 둔다.
 #   대기시간 4개 : 승차 완료 건 1,323,620 (취소 건은 wait=NaN 이라 자동 제외)
 #   취소율       : 시뮬 입력 모수 1,527,213 (즉시콜+서울 전체)
-#   지역 지니    : 100건 이상 동 430개 (D-04)
+#   지역 지니    : 100건 이상 동 430개 (D-04), 동 균등가중
 #
 # cancel_ratio 는 원래 0.142 였으나 그 값은 필터 이전 원본 전체(1,729,476)를
 # 분모로 쓴 것이라 다른 지표와 모수가 어긋났다. 시뮬 입력 모수 기준 13.3% 로 정정.
@@ -41,7 +41,7 @@ def efficiency(log: pd.DataFrame) -> dict:
 def equity(log: pd.DataFrame) -> dict:
     """형평: 동간 대기 격차(지니), 3km 커버, 장기대기(60분 초과) 비율.
 
-    지니는 dong_wait_table() + gini() 조합으로 계산한다(D-04 적용, 콜수 가중).
+    지니는 dong_wait_table() + gini() 조합으로 계산한다(D-04 적용, 동 균등가중).
     3km 커버는 거점 좌표가 필요해 log 만으로는 안 나온다 — 배치안과 함께 계산.
     """
     raise NotImplementedError
@@ -74,13 +74,16 @@ def dong_wait_table(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
 
 def dong_gini(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
               weighted: bool = False, **kw) -> float:
-    """동간 대기시간 지니(D-04 적용). 관문 C 타깃 0.095.
+    """동간 대기시간 지니(D-04 적용, **동 균등가중**). 관문 C 타깃 0.095.
 
-    ⚠ 가중 방식이 타깃과 어긋나 있다. 원본 산출물(서울즉시콜_동별_대기격차.csv)로
-    역산하면 타깃 0.095 는 **동 균등가중** 값(0.0947)이다. 콜수 가중으로 계산하면
-    0.1013 이 나온다. ASSA D-04 문구는 '콜수 가중'이라 서로 맞지 않는다.
-    타깃을 재현하는 쪽(균등가중)을 기본으로 두고, weighted=True 로 전환 가능하게 뒀다.
-    어느 쪽을 정본으로 삼을지는 관문 C 에서 확정할 것.
+    형평을 '동 간 격차'로 정의하므로 각 동을 한 표로 세는 균등가중이 정본이다.
+    콜수로 가중하면 콜이 많은 동이 지표를 지배해 정작 소외된 동의 격차가 묻힌다.
+    원본 산출물(서울즉시콜_동별_대기격차.csv)로 역산한 타깃 0.095 도 균등가중 값
+    (0.0947)이라 정의와 실측이 맞아떨어진다.
+
+    weighted=True 로 콜수 가중(0.1013)도 뽑을 수 있게 남겨뒀다 — 참고용이며
+    관문 C 채점에는 쓰지 않는다. ASSA D-04 문구에 '콜수 가중'이라 적힌 것은
+    오기이고, 여기 정의가 정본이다.
     """
     tbl = dong_wait_table(log, min_calls=min_calls, **kw)
     return gini(tbl["mean_wait"], weights=tbl["n_calls"] if weighted else None)
@@ -92,7 +95,7 @@ def cost(placement: pd.DataFrame) -> dict:
 
 
 def gini(values, weights=None) -> float:
-    """지니계수(콜수 가중 가능). 0 = 완전균등, 1 = 완전불균등.
+    """지니계수(가중치 선택 가능). 0 = 완전균등, 1 = 완전불균등.
 
     정렬 후 누적합으로 계산한다(쌍별 차이 이중루프는 430개 동에도 느리다).
       G = 1 − Σ wᵢ(Sᵢ₋₁ + Sᵢ) / (W · Sₙ),  S = 누적 Σ w·x, W = Σ w
