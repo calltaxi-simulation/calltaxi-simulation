@@ -8,7 +8,10 @@ data/
 !tests/**/*.csv        # 테스트용 소형 샘플은 허용
 
 # 시뮬 결과물
-outputs/
+# 'outputs/' 로 두면 git 이 디렉터리 자체를 건너뛰어 .gitkeep 도 되살릴 수 없다.
+# 내용물만 제외하고 .gitkeep 은 남겨 clone 시 폴더가 유지되게 한다.
+outputs/*
+!outputs/.gitkeep
 *.png
 *.html
 !README*.png           # 문서용 이미지는 허용
