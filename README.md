@@ -28,6 +28,13 @@ pip install -r requirements.txt
 
 데이터는 저장소에 포함되지 않음(대용량). 아래 파일을 저장소와 같은 상위 폴더의 data/ 에 둔다. 코드는 ../data/ 를 참조한다.
 
+폴더 구조가 다르면 환경변수 `DATA_DIR` 로 덮어쓴다.
+
+```bash
+export DATA_DIR=/path/to/data     # macOS/Linux
+$env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
+```
+
 | 파일 | 용도 |
 |---|---|
 | 서울시설공단_장애인콜택시 탑승내역_20251231.csv | 콜 원본(시뮬 입력) |

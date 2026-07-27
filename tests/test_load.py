@@ -4,6 +4,8 @@ test_load.py — 데이터 로딩 검증 (관문 B)
 동 이름 정규화와 좌표 매칭이 조용히 깨지면 이후 지표가 전부 어긋난다.
 콜 원본을 읽는 테스트는 느려서 slow 마커를 붙였다: `pytest -m "not slow"` 로 제외.
 """
+from pathlib import Path
+
 import pytest
 
 import load
@@ -15,6 +17,34 @@ SEOUL_BBOX = (37.41, 37.71, 126.76, 127.19)   # lat_min, lat_max, lon_min, lon_m
 def in_seoul(lat, lon):
     la0, la1, lo0, lo1 = SEOUL_BBOX
     return (lat.between(la0, la1) & lon.between(lo0, lo1)).all()
+
+
+# ─────────────────────────────────────────────────────────────
+# 데이터 경로 해석
+# ─────────────────────────────────────────────────────────────
+
+def test_data_dir_defaults_to_sibling_data(monkeypatch):
+    """환경변수가 없으면 저장소 상위의 data/ 를 본다."""
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    assert load.resolve_data_dir() == load.DEFAULT_DATA_DIR
+    assert load.DEFAULT_DATA_DIR.name == "data"
+
+
+def test_data_dir_env_override(monkeypatch, tmp_path):
+    """DATA_DIR 을 주면 그 폴더를 본다 — clone 구조가 달라도 돌아가게."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert load.resolve_data_dir() == tmp_path.resolve()
+
+
+def test_data_dir_env_blank_falls_back(monkeypatch):
+    """빈 값·공백만 있으면 설정 안 한 것으로 본다."""
+    monkeypatch.setenv("DATA_DIR", "   ")
+    assert load.resolve_data_dir() == load.DEFAULT_DATA_DIR
+
+
+def test_data_dir_env_expands_user(monkeypatch):
+    monkeypatch.setenv("DATA_DIR", "~/calltaxi-data")
+    assert load.resolve_data_dir() == (Path.home() / "calltaxi-data").resolve()
 
 
 # ─────────────────────────────────────────────────────────────

@@ -2,7 +2,12 @@
 load.py — 데이터 로딩·전처리
 
 원천 CSV/GeoJSON을 읽어 시뮬레이터가 쓸 형태로 정리한다.
-데이터는 저장소 밖(oracle/data/)에 있으므로 기본 경로는 ../data/.
+
+데이터는 대용량이라 저장소에 포함하지 않는다. 기본 경로는 저장소 상위의 ../data/ 이고,
+폴더 구조가 다르면 환경변수 DATA_DIR 로 덮어쓴다. 필요한 파일 목록은 README 참조.
+
+    export DATA_DIR=/path/to/data     # macOS/Linux
+    $env:DATA_DIR = "D:\\calltaxi"    # Windows PowerShell
 
 콜 원본은 338MB·173만 행이라 매번 파싱하면 느리다. 필터·파생까지 마친
 결과를 cache/ 에 parquet 으로 떨궈두고, 원본이 바뀌면 자동으로 다시 만든다.
@@ -11,14 +16,31 @@ load.py — 데이터 로딩·전처리
 시그니처가 이미 영문(origin, dest, hour, mean_wait)이라 그쪽에 맞췄다.
 원천 한글 컬럼과의 대응은 각 함수 docstring 참조.
 """
-from pathlib import Path
+import os
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-# 데이터 경로 (simulation/ 기준 상위 data/)
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+# 저장소 상위의 data/ — clone 위치가 어디든 이 파일 기준으로 잡힌다.
+DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+
+
+def resolve_data_dir() -> Path:
+    """데이터 폴더 결정. 환경변수 DATA_DIR 이 있으면 그쪽, 없으면 ../data/.
+
+    팀원마다 clone 구조가 달라도 경로만 지정하면 돌아가게 하려는 것이다.
+    import 시점에 한 번 읽어 DATA_DIR 에 담는다 — 실행 중에 환경변수를 바꿨다면
+    이 함수를 다시 불러 받아야 한다.
+    """
+    env = os.environ.get("DATA_DIR", "").strip()
+    return Path(env).expanduser().resolve() if env else DEFAULT_DATA_DIR
+
+
+DATA_DIR = resolve_data_dir()
+
+# 캐시는 산출물이라 데이터 폴더가 아니라 저장소 안에 둔다(읽기전용 데이터 폴더 대응).
 CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 
 # 서울 25개 자치구. 원본에 경기·인천 건이 섞여 있어 화이트리스트로 거른다.
@@ -417,8 +439,12 @@ if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding="utf-8")
 
-    print("DATA_DIR:", DATA_DIR)
+    src = "환경변수 DATA_DIR" if os.environ.get("DATA_DIR", "").strip() else "기본값 ../data/"
+    print(f"DATA_DIR: {DATA_DIR}  ({src})")
     print("존재:", DATA_DIR.exists())
+    if not DATA_DIR.exists():
+        print("→ 폴더 구조가 다르면 환경변수 DATA_DIR 로 지정한다. 파일 목록은 README 참조.")
+        raise SystemExit(1)
     print()
 
     lookup = build_dong_lookup()
