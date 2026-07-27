@@ -1,0 +1,33 @@
+# 데이터 (oracle/data/ 에 별도 보관 — 저장소에 올리지 않음)
+# simulation/ 이 저장소 루트이므로 상위 data/ 는 자동 제외됨.
+# 혹시 simulation 내부에 데이터를 두면 아래로 제외:
+data/
+*.csv
+*.geojson
+*.parquet              # 콜 원본 캐시 — 위치가 바뀌어도 걸리도록 확장자로도 제외
+!tests/**/*.csv        # 테스트용 소형 샘플은 허용
+
+# 시뮬 결과물
+outputs/
+*.png
+*.html
+!README*.png           # 문서용 이미지는 허용
+
+# 파이썬 캐시
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# 가상환경
+.venv/
+venv/
+*.egg-info/
+
+# 데이터 캐시(원본에서 재생성 가능)
+cache/
+
+# 에디터
+.vscode/
+.idea/
+.DS_Store
