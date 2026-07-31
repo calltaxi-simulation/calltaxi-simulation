@@ -51,6 +51,9 @@ $env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
 # 데이터 로딩 점검 (원본 → 필터·좌표매칭 결과 요약)
 python src/load.py
 
+# 이동시간 테이블 점검 (커버율·샘플 조회·이상값)
+python src/travel_time.py
+
 # 시뮬 실행 (현행 배치 재현 → 관문 C 검증)
 python src/simulator.py
 
