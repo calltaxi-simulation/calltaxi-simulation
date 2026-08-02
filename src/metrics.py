@@ -135,10 +135,6 @@ def cancel_kind(calls: pd.DataFrame) -> pd.Series:
       other        배차 전 취소 중 취소 시각이 결측이라 즉시/포기를 판별할 수 없는
                    건(24건). 근거 없는 분류를 피해 별도 구간으로 둔다.
 
-    other 를 3구간 중 하나에 흡수하지 않는 이유: 배차 전이라 '배차 후 취소'가 아니고,
-    시각을 모르니 '즉시'·'포기' 어느 쪽으로 몰아도 근거가 없다. 특히 '대기 중 포기'는
-    공급 부족 신호로 읽는 값이라 오염되면 안 된다. 네 구간의 합이 전체 취소와 정확히
-    맞아야 취소율도 검증 기준 13.3%와 어긋나지 않는다.
 
     취소 시각이 접수보다 앞선 기록이 4건 있는데 immediate 로 들어간다(오차 무시).
     """
@@ -427,7 +423,7 @@ def build_dong_table(calls: pd.DataFrame, *, depots: pd.DataFrame = None,
     for part in (dong_wait(calls), dong_ride(calls), dong_cancel(calls)):
         tbl = tbl.merge(part, on=["gu", "dong_canon"], how="left")
 
-    # 신뢰 기준은 지니(D-04)와 같은 분모로 잰다 — 승차 완료 건이지 접수 건이 아니다.
+    # 신뢰 기준은 지니와 같은 분모로 잰다 — 승차 완료 건이지 접수 건이 아니다.
     # 접수 기준으로 재면 창신제3동(접수 108 / 승차 95)처럼 지니에서는 빠진 동이
     # 표에서는 신뢰로 잡혀 두 지표의 모집단이 어긋난다.
     tbl["is_reliable"] = tbl["n_served"].fillna(0) >= min_calls
@@ -591,8 +587,8 @@ def gini(values, weights=None) -> float:
 def standard_compliance(tbl: pd.DataFrame) -> pd.DataFrame:
     """기준 충족률 — 동별 값이 서비스 기준선을 넘는 비율.
 
-    아직 비워둔다. 기준선(예: '평균 대기 30분 이하')을 먼저 정해야 하는데, 분포를
-    보고 정하기로 했다. build_dong_table 의 wait_total_p50/p90 분포를 확인한 뒤 채운다.
+    아직 비워둔다. 기준선(예: '평균 대기 30분 이하')을 먼저 정해야 하는데,
+    build_dong_table 의 wait_total_p50/p90 분포를 확인한 뒤 채운다.
     """
     raise NotImplementedError("기준선 미정 — 동별 대기 분포 확인 후 결정")
 
