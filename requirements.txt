@@ -20,5 +20,5 @@ scipy>=1.11            # 분포 적합·통계
 streamlit>=1.30        # 대시보드
 matplotlib>=3.7        # 시각화
 pyarrow>=14.0          # parquet 캐시(대용량 콜 데이터)
-pytest>=7.4            # 관문 B 테스트
+pytest>=7.4            # 코드 점검 테스트
 jupyter                # 탐색·검증용
