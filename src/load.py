@@ -408,88 +408,6 @@ def load_candidates(path: Path = None, *, seoul_only: bool = True) -> pd.DataFra
     return out[cols]
 
 
-def load_disabled_population(path: Path = None) -> pd.DataFrame:
-    """동별 등록 장애인 수(장애유형 합계 · 성별 계).
-
-    통계표를 그대로 받은 파일이라 정형이 아니다. 세 가지를 흡수한다:
-      - 행 끝에 쉼표가 남아 빈 컬럼이 하나 더 붙고 열 수가 어긋난 행이 섞여 있다
-        → on_bad_lines='skip' + engine='python'
-      - 구 컬럼이 따로 없고 '동별' 한 컬럼에 총계·구·동·'기타'가 섞여 있다.
-        구 행이 그 구의 동들 앞에 오는 순서라 ffill 로 구를 채운다.
-      - 값이 '-' 인 칸이 있다(집계 없음) → NaN
-
-    '기타'(구마다 1행)는 동 단위가 없는 잔여분이라 동 지표에 못 쓴다. 총계·구 행과
-    함께 뺀다. 남는 427개 동의 합은 384,921명으로 표 전체 합계(384,934)와 13명 차이다.
-
-    반환 컬럼: gu, dong, dong_canon, dong_base, n_disabled
-    """
-    path = Path(path) if path else DATA_DIR / "서울시_장애인_통계_2026_05.csv"
-    df = pd.read_csv(path, encoding="utf-8-sig", on_bad_lines="skip", engine="python")
-
-    df = df[(df["장애유형별"] == "합계") & (df["성별"] == "계")].copy()
-    # 구 행이 동 행보다 먼저 나오는 순서에 기댄다 — 원본 정렬이 바뀌면 여기가 깨진다.
-    df["gu"] = df["동별"].where(df["동별"].isin(SEOUL_GU)).ffill()
-
-    # 연도 컬럼명이 갱신마다 바뀐다('2025 년' → '2026 년'). 마지막 연도 컬럼을 쓴다.
-    year_cols = [c for c in df.columns if re.fullmatch(r"\d{4}\s*년", str(c))]
-    if not year_cols:
-        raise ValueError(f"연도 컬럼을 찾지 못했다: {list(df.columns)}")
-
-    out = df[~df["동별"].isin(SEOUL_GU) & ~df["동별"].isin(("합계", "기타"))].copy()
-    out = out.rename(columns={"동별": "dong"})
-    out["n_disabled"] = pd.to_numeric(out[year_cols[-1]], errors="coerce")
-    out["dong_canon"] = out["dong"].map(canon_dong)
-    out["dong_base"] = out["dong_canon"].map(_base_dong)
-
-    cols = ["gu", "dong", "dong_canon", "dong_base", "n_disabled"]
-    return out[cols].reset_index(drop=True)
-
-
-_VEHICLE_COLS = ["no", "ridetime", "하차일시", "승차거리", "매칭여부"]
-
-
-def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
-    """차량별 운행 기록. 차량 생산성(시간당 통행·실차율) 산출용.
-
-    travel_time.load_rides 와 같은 원본이지만 목적이 달라 필터가 다르다. 저쪽은
-    동A→동B 이동시간 표를 만드는 게 목적이라 출발·목적이 모두 서울인 건만 쓰지만,
-    여기서는 서울 밖 운행도 차량이 묶여 있던 시간이라 구를 가리지 않는다.
-
-    필터: 매칭여부 == 'Y'(승차·하차 시각이 다 있는 완료 건), 운행시간 1~120분
-
-    차량번호(no)는 884개다. 차고지 정원 합 691대보다 많은데, 1년치라 중간에
-    교체·증차된 차량이 모두 잡히기 때문이다. 특정 시점의 가동 대수가 아니다.
-
-    service_date 는 승차 시각 기준이라 자정을 넘긴 운행은 다음 날로 넘어간다.
-    심야 비중이 1.7%라 하루 단위 집계에는 영향이 거의 없다.
-
-    반환 컬럼: vehicle_id, service_date, boarded_at, alighted_at, ride_min, km
-    """
-    path = Path(path) if path else DATA_DIR / "calltaxi_2025_병합.csv"
-    df = pd.read_csv(path, encoding="utf-8-sig", usecols=_VEHICLE_COLS, low_memory=False)
-    n_raw = len(df)
-
-    df = df[df["매칭여부"].astype(str).str.upper().eq("Y")]
-    board = pd.to_datetime(df["ridetime"], format="ISO8601", errors="coerce")
-    alight = pd.to_datetime(df["하차일시"], format="ISO8601", errors="coerce")
-    ride_min = (alight - board).dt.total_seconds() / 60
-
-    ok = ride_min.between(1.0, 120.0) & board.notna()
-    df, board, alight, ride_min = df[ok], board[ok], alight[ok], ride_min[ok]
-
-    out = pd.DataFrame({
-        "vehicle_id": df["no"].to_numpy(),
-        "service_date": board.dt.normalize().to_numpy(),
-        "boarded_at": board.to_numpy(),
-        "alighted_at": alight.to_numpy(),
-        "ride_min": ride_min.astype("float32").to_numpy(),
-        "km": (pd.to_numeric(df["승차거리"], errors="coerce") / 1000)
-              .astype("float32").to_numpy(),
-    })
-    out.attrs["n_raw"] = n_raw
-    return out.reset_index(drop=True)
-
-
 def load_undersupplied(path: Path = None, *, max_vehicles_3km: int = 10) -> pd.DataFrame:
     """과소공급 동(3km내 차량 10대 이하) 로딩.
 
@@ -559,4 +477,4 @@ if __name__ == "__main__":
     w = calls["wait_min"].dropna()
     print(f"\n대기시간(분)   평균 {w.mean():.1f} / 중앙값 {w.median():.1f} / "
           f"p90 {w.quantile(.9):.1f} / 60분초과 {(w > 60).mean():.1%}")
-    print("검증 기준      평균 39.3 / 중앙값 30.8 / p90 77.2 / 60분초과 17.9%")
+    print("관문 C 타깃    평균 39.3 / 중앙값 30.8 / p90 77.2 / 60분초과 17.9%")

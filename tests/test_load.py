@@ -1,5 +1,5 @@
 """
-test_load.py — 데이터 로딩 검증 (코드 점검)
+test_load.py — 데이터 로딩 검증 (관문 B)
 
 동 이름 정규화와 좌표 매칭이 조용히 깨지면 이후 지표가 전부 어긋난다.
 콜 원본을 읽는 테스트는 느려서 slow 마커를 붙였다: `pytest -m "not slow"` 로 제외.
@@ -167,7 +167,7 @@ def test_calls_wait_time_sane(calls):
 
 @pytest.mark.slow
 def test_calls_reproduce_observed_targets(calls):
-    """검증 기준이 실측에서 재현되는지 — 필터 정의가 맞는지 확인."""
+    """관문 C 캘리브레이션 타깃이 실측에서 재현되는지 — 필터 정의가 맞는지 확인."""
     w = calls["wait_min"].dropna()
     assert w.mean() == pytest.approx(39.3, abs=0.3)
     assert w.median() == pytest.approx(30.8, abs=0.3)

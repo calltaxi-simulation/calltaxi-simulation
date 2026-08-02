@@ -38,10 +38,9 @@ $env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
 | 파일 | 용도 |
 |---|---|
 | 서울시설공단_장애인콜택시 탑승내역_20251231.csv | 콜 원본(시뮬 입력) |
-| calltaxi_2025_병합.csv | 차량번호 병합본(이동시간·차량 생산성) |
+| calltaxi_2025_병합.csv | 차량번호 병합본 |
 | 차고지44_좌표.csv | 현행 거점 44개 위치 |
 | 행정동_중심점.csv | 동 중심 좌표 |
-| 서울시_장애인_통계_2026_05.csv | 동별 등록 장애인(이용률 분모) |
 | HangJeongDong_ver20230701.geojson | 동 경계 |
 | 동별_거점용량_접근성.csv | 과소공급 동(3km내 10대 이하) |
 | 공영주차장_목록.csv / 시영주차장_목록.csv | 후보지 원본 |
@@ -55,16 +54,13 @@ python src/load.py
 # 이동시간 테이블 점검 (커버율·샘플 조회·이상값)
 python src/travel_time.py
 
-# 동별 진단 지표 산출 (outputs/ 에 저장 → 전체값을 검증 기준과 대조)
-python src/metrics.py
-
-# 시뮬 실행 (현행 배치 재현 → 검증)
+# 시뮬 실행 (현행 배치 재현 → 관문 C 검증)
 python src/simulator.py
 
 # 대시보드
 streamlit run src/dashboard.py
 
-# 테스트 (코드 점검)
+# 테스트 (관문 B)
 pytest
 pytest -m "not slow"    # 대용량 CSV를 읽는 테스트 제외
 ```
@@ -78,22 +74,16 @@ simulation/
 │  ├ load.py         # 데이터 로딩·전처리
 │  ├ travel_time.py  # 이동시간 테이블(실측 OD + 거리 보조)
 │  ├ simulator.py    # 시뮬 엔진(SimPy)
-│  ├ metrics.py      # 동별 진단 지표(대기·차내·미이행·수요·공급·형평)
+│  ├ metrics.py      # 성과지표(대기·지니·장기대기·공차)
 │  └ dashboard.py    # Streamlit
 ├ docs/
-│  └ calibration.md  # 필터 정의·지표 정의·타깃 근거·데이터 한계
+│  └ calibration.md  # 필터 정의·타깃 근거·데이터 한계
 ├ tests/            # pytest
 ├ cache/            # 콜 원본 parquet 캐시(자동 생성, git 제외)
 └ outputs/          # 결과
-   ├ dong_metrics.csv/.parquet   # 동별 지표 표(432개 동) — 대시보드가 읽는다
-   ├ dong_demand_matrix.parquet  # 동 × 시간대 × 평일/주말 콜 수
-   └ vehicle_productivity.csv    # 차량 생산성 요약(동별 아님)
 ```
 
-지표 함수는 파일을 읽지 않고 데이터프레임만 받는다. 실측 콜(진단)과 시뮬 로그(예측)에
-같은 함수를 그대로 통과시켜 before/after 를 비교하려는 것이다. 로딩은 load.py 담당.
-
-## 검증 기준
+## 검증 기준 (관문 C 캘리브레이션 타깃)
 
 현행 배치로 돌렸을 때 실측값 재현 여부로 판정한다.
 **지표마다 분모가 다르니 대조할 때 주의할 것.**
