@@ -190,6 +190,40 @@ def test_cancel_kind_four_buckets():
         np.nan, "immediate", "abandoned", "after_assign", "other"]
 
 
+def test_cancel_share_sums_to_one():
+    """취소 내 구성비 4개의 합 = 100%. 분모는 콜이 아니라 그 동의 전체 취소 건."""
+    df = _toy_calls([_call(assign=5, board=30)] * 6 + [_call(cancel=0.5),
+                                                       _call(cancel=40),
+                                                       _call(assign=8, cancel=25),
+                                                       _call(cancel=None)])
+    out = metrics.dong_cancel(df).iloc[0]
+    assert out["n_canceled"] == 4
+    assert sum(out[f"cancel_{k}_share"] for k in metrics.CANCEL_KINDS) == pytest.approx(1.0)
+    assert out["cancel_abandoned_share"] == pytest.approx(0.25)   # 취소 4건 중 1건
+    assert out["cancel_abandoned_ratio"] == pytest.approx(0.1)    # 콜 10건 중 1건
+
+
+def test_cancel_share_is_nan_without_cancels():
+    """취소가 없으면 0/0 이다. 0으로 채우면 '전부 즉시 취소'와 구분이 안 된다."""
+    out = metrics.dong_cancel(_toy_calls([_call(assign=5, board=30)] * 3)).iloc[0]
+    assert out["n_canceled"] == 0
+    assert out["cancel_ratio"] == 0.0
+    assert all(pd.isna(out[f"cancel_{k}_share"]) for k in metrics.CANCEL_KINDS)
+
+
+def test_cancel_breakdown_totals():
+    """서울 합산 표: 콜 대비 합 = 전체 취소율, 취소 중 비중 합 = 1."""
+    df = _toy_calls([_call(assign=5, board=30)] * 6 + [_call(cancel=0.5),
+                                                       _call(cancel=40),
+                                                       _call(assign=8, cancel=25),
+                                                       _call(cancel=None)])
+    brk = metrics.cancel_breakdown(df)
+    assert list(brk["구분"]) == [metrics.CANCEL_KIND_KO[k] for k in metrics.CANCEL_KINDS]
+    assert brk["건수"].sum() == 4
+    assert brk["콜 대비"].sum() == pytest.approx(0.4)
+    assert brk["취소 중 비중"].sum() == pytest.approx(1.0)
+
+
 def test_cancel_other_is_not_absorbed_into_abandoned():
     """시각 결측 건을 '대기 중 포기'로 몰면 공급 부족 신호가 오염된다 — 분리 유지."""
     df = _toy_calls([_call(cancel=40), _call(cancel=None), _call(cancel=None)])
@@ -455,6 +489,9 @@ def test_build_dong_table_reproduces_dong_universe(calls, data_dir):
     # 4구간 취소 분해가 전체 취소율과 어긋나면 검증 기준 13.3%가 깨진다
     parts = tbl[[f"cancel_{k}_ratio" for k in metrics.CANCEL_KINDS]].sum(axis=1)
     assert (parts - tbl["cancel_ratio"]).abs().max() < 1e-9
+    # 취소 내 구성비는 취소가 있는 동에서 반드시 100%
+    shares = tbl[[f"cancel_{k}_share" for k in metrics.CANCEL_KINDS]].sum(axis=1)
+    assert (shares[tbl["n_canceled"] > 0] - 1).abs().max() < 1e-9
     # 인구를 이중 계상하면 붙은 합이 통계 총합을 넘는다
     pop_total = load.load_disabled_population()["n_disabled"].sum()
     assert tbl["n_disabled"].sum() <= pop_total

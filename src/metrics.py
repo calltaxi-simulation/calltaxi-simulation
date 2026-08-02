@@ -223,10 +223,21 @@ def dong_ride(calls: pd.DataFrame, *, keys=DONG_KEYS) -> pd.DataFrame:
 
 
 def dong_cancel(calls: pd.DataFrame, *, keys=DONG_KEYS) -> pd.DataFrame:
-    """동별 미이행 4구간 비율. 분모는 전체 접수 콜(취소 포함).
+    """동별 미이행 4구간. 즉시 취소 / 대기 중 포기 / 배차 후 취소 / 기타(불명).
 
-    즉시 취소 / 대기 중 포기 / 배차 후 취소 / 기타(불명) — cancel_{종류}_ratio
-    4개의 합 = cancel_ratio 로 정확히 맞는다.
+    같은 분해를 분모 둘로 낸다. 관점이 다르지 각각 답하는 질문이 다르다.
+
+      cancel_{종류}_ratio  콜 대비 — 분모는 전체 접수 콜(취소 포함).
+                           '이 동에서 콜을 넣으면 얼마나 미이행되나'
+      cancel_{종류}_share  취소 내 구성비 — 분모는 그 동의 전체 취소 건.
+                           '미이행된 콜이 왜 미이행됐나'
+
+    ratio 4개의 합 = cancel_ratio, share 4개의 합 = 1 로 정확히 맞는다.
+    **검증 채점과 전체 취소율 13.3%는 ratio(콜 대비) 기준이다.** share 는 해석용
+    보조 지표라 분모를 바꾸지 않는다.
+
+    취소가 한 건도 없는 동은 share 가 NaN 이다(0/0). 0으로 채우면 '전부 즉시
+    취소였다'와 구분이 안 된다.
     """
     df = calls.assign(cancel_kind=cancel_kind(calls))
     n = _by_dong(df, keys).size().rename("n_calls")
@@ -237,6 +248,11 @@ def dong_cancel(calls: pd.DataFrame, *, keys=DONG_KEYS) -> pd.DataFrame:
 
     out = counts.div(n, axis=0).add_prefix("cancel_").add_suffix("_ratio")
     out["cancel_ratio"] = out.sum(axis=1)
+
+    n_canceled = counts.sum(axis=1)
+    share = counts.div(n_canceled.replace(0, np.nan), axis=0)
+    out = out.join(share.add_prefix("cancel_").add_suffix("_share"))
+    out["n_canceled"] = n_canceled
     return _tidy(out)
 
 
@@ -393,8 +409,11 @@ _COLUMN_ORDER = (
     "wait_match_mean", "wait_match_p50", "wait_match_p90",
     "wait_pickup_mean", "wait_pickup_p50", "wait_pickup_p90",
     "ride_min_mean", "ride_kmh_mean", "ride_km_mean",
-    "cancel_ratio", "cancel_immediate_ratio", "cancel_abandoned_ratio",
+    "n_canceled", "cancel_ratio",
+    "cancel_immediate_ratio", "cancel_abandoned_ratio",
     "cancel_after_assign_ratio", "cancel_other_ratio",
+    "cancel_immediate_share", "cancel_abandoned_share",
+    "cancel_after_assign_share", "cancel_other_share",
     "vehicles_3km", "n_depots_3km",
     "n_disabled", "pop_match", "usage_rate",
 )
@@ -613,6 +632,25 @@ def overall_metrics(calls: pd.DataFrame) -> dict:
     }
 
 
+def cancel_breakdown(calls: pd.DataFrame) -> pd.DataFrame:
+    """전체(서울 합산) 미이행 4구간 표. 건수 · 콜 대비 · 취소 내 구성비.
+
+    동별 표를 평균 낸 게 아니라 건수를 그대로 합친 값이다. 동 균등가중 평균과는
+    다르니 인용할 때 어느 쪽 기준인지 밝힐 것 — 콜이 많은 동이 여기서는 더 무겁다.
+
+    '콜 대비' 합 = 전체 취소율(13.3%), '취소 중 비중' 합 = 1.
+    """
+    kind = pd.Series(cancel_kind(calls))
+    counts = kind.value_counts().reindex(list(CANCEL_KINDS), fill_value=0)
+    n = counts.to_numpy()
+    return pd.DataFrame({
+        "구분": [CANCEL_KIND_KO[k] for k in CANCEL_KINDS],
+        "건수": n,
+        "콜 대비": n / len(calls),
+        "취소 중 비중": n / n.sum(),
+    })
+
+
 def compare_to_target(result: dict) -> pd.DataFrame:
     """검증: 산출값 vs 검증 기준 대조표. 허용오차는 TARGET_TOL."""
     rows = []
@@ -672,5 +710,12 @@ if __name__ == "__main__":
     print(f"  실차율        {prod['occupied_ratio']:.1%}  (상한 — docstring 참조)")
 
     print(f"\n저장: {OUT_DIR}")
+
+    print("\n미이행 4구간 (서울 합산 — 동 균등가중 평균 아님)")
+    brk = cancel_breakdown(calls)
+    print(brk.to_string(index=False, formatters={
+        "건수": "{:,}".format, "콜 대비": "{:.2%}".format,
+        "취소 중 비중": "{:.1%}".format}))
+
     print("\n검증 (전체값 vs 검증 기준)")
     print(compare_to_target(overall_metrics(calls)).to_string(index=False))
