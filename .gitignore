@@ -11,6 +11,16 @@ data/
 # 내용물만 제외하고 .gitkeep 은 남겨 clone 시 폴더가 유지되게 한다.
 outputs/*
 !outputs/.gitkeep
+
+# 산출물 3종은 추적한다. 원본 CSV 가 저장소 밖이라 clone 만으로는 재생성할 수
+# 없고, 대시보드가 이 파일들을 읽는다. 위 *.csv / *.parquet 규칙보다 뒤에 와야
+# 예외가 먹는다(마지막에 일치하는 패턴이 이긴다).
+!outputs/dong_metrics.csv
+!outputs/vehicle_productivity.csv
+!outputs/dong_demand_matrix.parquet
+# dong_metrics.parquet 은 위 csv 와 같은 내용의 직렬화 중복이라 뺀다 —
+# 바이너리라 diff 가 안 되고 실행할 때마다 새 blob 이 쌓인다.
+
 *.png
 *.html
 !README*.png           # 문서용 이미지는 허용
