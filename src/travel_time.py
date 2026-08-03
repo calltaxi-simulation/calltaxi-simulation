@@ -114,15 +114,15 @@ def haversine_km(lat1, lon1, lat2, lon2):
 # 원본 → 실측 운행 표
 # ─────────────────────────────────────────────────────────────
 
-_RIDE_COLS = ["ridetime", "하차일시", "startpos1", "startpos2",
-              "endpos1", "endpos2", "승차거리", "매칭여부"]
+_RIDE_COLS = ["승차일시", "하차일시", "출발구", "출발동",
+              "목적구", "목적동", "승차거리"]
 
 
 def load_rides(path: Path = None) -> pd.DataFrame:
     """calltaxi 병합본에서 이동시간 산출에 쓸 운행만 남긴다.
 
     필터(단계별 잔존 건수는 attrs['funnel'] 에 담는다):
-      매칭여부 == 'Y'          — 승차·하차 시각이 다 있는 완료 건
+      승차·하차 시각이 모두 기록 — 취소·미탑승 건을 뺀 완료 운행
       출발·목적 모두 서울 25구  — 경기·인천 편도는 뺀다
       운행시간 1~120분          — 하차 − 승차
       승차거리 > 0
@@ -130,22 +130,24 @@ def load_rides(path: Path = None) -> pd.DataFrame:
 
     반환 컬럼: origin, dest(표준형 동명), minutes, km, kmh, hour, period, is_weekend
     """
-    path = Path(path) if path else DATA_DIR / "calltaxi_2025_병합.csv"
+    path = Path(path) if path else DATA_DIR / "calltaxi_2025_merged.csv"
     df = pd.read_csv(path, encoding="utf-8-sig", usecols=_RIDE_COLS, low_memory=False)
     funnel = {"원본": len(df)}
 
-    df = df[df["매칭여부"].astype(str).str.upper().eq("Y")]
-    funnel["매칭 Y"] = len(df)
+    board = pd.to_datetime(df["승차일시"], format="ISO8601", errors="coerce")
+    alight = pd.to_datetime(df["하차일시"], format="ISO8601", errors="coerce")
+    ok = board.notna() & alight.notna()
+    df, board, alight = df[ok], board[ok], alight[ok]
+    funnel["승차·하차 기록"] = len(df)
 
-    df = df[df["startpos1"].isin(SEOUL_GU) & df["endpos1"].isin(SEOUL_GU)]
+    ok = df["출발구"].isin(SEOUL_GU) & df["목적구"].isin(SEOUL_GU)
+    df, board, alight = df[ok], board[ok], alight[ok]
     funnel["서울 내"] = len(df)
 
-    board = pd.to_datetime(df["ridetime"], format="ISO8601", errors="coerce")
-    alight = pd.to_datetime(df["하차일시"], format="ISO8601", errors="coerce")
     minutes = (alight - board).dt.total_seconds() / 60
     km = pd.to_numeric(df["승차거리"], errors="coerce") / 1000
 
-    ok = (minutes.between(*RIDE_MIN_RANGE) & (km > 0) & board.notna())
+    ok = minutes.between(*RIDE_MIN_RANGE) & (km > 0)
     df, board, minutes, km = df[ok], board[ok], minutes[ok], km[ok]
     funnel["시간·거리 정상"] = len(df)
 
@@ -155,8 +157,8 @@ def load_rides(path: Path = None) -> pd.DataFrame:
     funnel["속도 정상"] = len(df)
 
     out = pd.DataFrame({
-        "origin": df["startpos2"].map(canon_dong),
-        "dest": df["endpos2"].map(canon_dong),
+        "origin": df["출발동"].map(canon_dong),
+        "dest": df["목적동"].map(canon_dong),
         "minutes": minutes.astype("float32").to_numpy(),
         "km": km.astype("float32").to_numpy(),
         "kmh": kmh.astype("float32").to_numpy(),
@@ -424,7 +426,7 @@ class TravelTime:
     def build(cls, *, use_cache: bool = True, calls_path: Path = None,
               centroid_path: Path = None) -> "TravelTime":
         """테이블 3종을 캐시에서 읽거나(없으면) 원본에서 만들어 저장한다."""
-        src = Path(calls_path) if calls_path else DATA_DIR / "calltaxi_2025_병합.csv"
+        src = Path(calls_path) if calls_path else DATA_DIR / "calltaxi_2025_merged.csv"
         paths = _cache_paths(src)
         centroids = load_centroids(centroid_path)
 
@@ -578,6 +580,24 @@ def _report():
     if len(far):
         print(f"    └ 그중 25km 이상 {len(far):,}건은 중앙 {far['err'].median():+.1f}분 "
               f"— 실측 {far['minutes'].median():.0f}분 vs 추정 {far['pred'].median():.0f}분")
+
+    # ── 우회계수 검산 ──
+    # DETOUR 는 직선거리를 도로 주행거리로 올리는 계수다. 실측 승차거리(도로)를
+    # 중심점 직선거리로 나눠 되짚는다 — 표본이 두꺼운 OD쌍만 본다.
+    pair = (rides.groupby(["origin", "dest"], observed=True)
+                 .agg(km=("km", "median"), n=("km", "size"))
+                 .reset_index())
+    pair = pair[(pair["n"] >= MIN_SPEED_TRIPS) & (pair["origin"] != pair["dest"])]
+    coord = tt.centroids.set_index("dong")[["lat", "lon"]]
+    olat, olon = pair["origin"].map(coord["lat"]), pair["origin"].map(coord["lon"])
+    dlat, dlon = pair["dest"].map(coord["lat"]), pair["dest"].map(coord["lon"])
+    line = haversine_km(olat.to_numpy(float), olon.to_numpy(float),
+                        dlat.to_numpy(float), dlon.to_numpy(float))
+    ok = np.isfinite(line) & (line > 0.1)          # 좌표 없거나 중심점이 겹치는 쌍은 뺀다
+    ratio = pair["km"].to_numpy()[ok] / line[ok]
+    print(f"\n[우회계수 검산] {MIN_SPEED_TRIPS}건 이상 OD쌍 {len(ratio):,}개  "
+          f"중앙 승차거리 ÷ 직선거리 = 중앙 {np.median(ratio):.3f} / 평균 {ratio.mean():.3f}"
+          f"   (설정값 DETOUR={DETOUR})")
 
     # ── 샘플 조회 ──
     print("\n[샘플 조회]")
