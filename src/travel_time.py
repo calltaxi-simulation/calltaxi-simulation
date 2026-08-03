@@ -14,7 +14,6 @@ get_travel_time(출발동, 목적동, hour, is_weekend) -> float
 DETOUR(우회계수)를 2순위에도 곱하는 이유·거리대 5구간 근거·커버율 등
 상세는 docs/calibration.md 참조.
 
-캐시: 산출 테이블을 cache/에 parquet 저장. 원본 바뀌면 자동 재생성.
 검증 출력: python src/travel_time.py
 
     get_travel_time("역삼1동", "논현1동", hour=8, is_weekend=False)  # → 분
