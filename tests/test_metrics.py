@@ -357,11 +357,36 @@ def test_population_base_fallback_sums_split_dong():
 
 
 def test_population_contested_base_stays_unmatched():
-    """콜이 더 잘게 쪼갠 경우(신당1~3동 ↔ 통계 신당동)는 나눌 근거가 없어 붙이지 않는다."""
+    """콜이 더 잘게 쪼갠 경우(신당1~3동 ↔ 통계 신당동)는 나눌 근거가 없어 붙이지 않는다.
+
+    동 하나에 귀속되는 n_disabled 는 비워두고, 그룹 인구는 pop_group 으로 따로 낸다.
+    """
     keys = pd.DataFrame([{"gu": "중구", "dong_canon": f"신당{i}동"} for i in (1, 2, 3)])
     out = metrics.dong_population(keys, _pop([("중구", "신당동", 900)]))
     assert out["n_disabled"].isna().all()
     assert out["pop_match"].isna().all()
+    assert (out["pop_group"] == 900).all()
+
+
+def test_population_group_pop_includes_already_matched_rows():
+    """그룹 인구는 잔여분이 아니라 그룹 전체다.
+
+    답십리3·4동을 살리려면 이미 정확히 붙은 답십리1·2동의 인구까지 분모에 들어가야
+    한다. 대신 이용률 분자도 4개 동을 다 더한다(build_dong_table).
+    """
+    keys = pd.DataFrame([{"gu": "동대문구", "dong_canon": f"답십리{i}동"}
+                         for i in (1, 2, 3, 4)])
+    pop = _pop([("동대문구", "답십리1동", 1000), ("동대문구", "답십리2동", 400)])
+    out = metrics.dong_population(keys, pop).set_index("dong_canon")
+    assert out.loc["답십리1동", "n_disabled"] == 1000    # 귀속 인구는 그대로
+    assert (out["pop_group"] == 1400).all()             # 그룹 인구는 전원 동일
+
+
+def test_population_group_pop_empty_when_all_resolved():
+    """전부 붙은 그룹에는 그룹 분모를 만들지 않는다(상일동 ↔ 상일1·2동)."""
+    keys = pd.DataFrame([{"gu": "강동구", "dong_canon": "상일동"}])
+    pop = _pop([("강동구", "상일1동", 700), ("강동구", "상일2동", 300)])
+    assert metrics.dong_population(keys, pop)["pop_group"].isna().all()
 
 
 def test_population_base_fallback_skips_already_matched():
@@ -470,6 +495,36 @@ def test_build_dong_table_without_optional_inputs():
     assert "wait_total_mean_vs_gu" in tbl.columns
 
 
+def test_usage_rate_groups_contested_base():
+    """콜 신당1~3동 ↔ 통계 신당동 — 콜을 그룹으로 합쳐 이용률을 낸다.
+
+    분자·분모가 같이 그룹으로 올라가므로 세 동은 같은 값을 갖는다.
+    """
+    rows = ([_call(assign=5, board=30, gu="중구", dong="신당1동")] * 60
+            + [_call(assign=5, board=30, gu="중구", dong="신당2동")] * 30
+            + [_call(assign=5, board=30, gu="중구", dong="신당3동")] * 10)
+    tbl = metrics.build_dong_table(_toy_calls(rows),
+                                   population=_pop([("중구", "신당동", 200)]))
+    tbl = tbl.set_index("dong_canon")
+    assert tbl["usage_is_grouped"].all()
+    assert (tbl["usage_pop"] == 200).all()
+    assert tbl["usage_rate"].tolist() == pytest.approx([100 / 200] * 3)   # 콜 100건 ÷ 200명
+    assert tbl["n_disabled"].isna().all()      # 동 하나에 귀속할 근거는 여전히 없다
+
+
+def test_usage_rate_not_grouped_when_matched():
+    """정확히 붙는 동은 자기 콜 ÷ 자기 인구 그대로다."""
+    rows = ([_call(assign=5, board=30, gu="A구", dong="사직동")] * 40
+            + [_call(assign=5, board=30, gu="A구", dong="삼청동")] * 10)
+    tbl = metrics.build_dong_table(
+        _toy_calls(rows),
+        population=_pop([("A구", "사직동", 100), ("A구", "삼청동", 50)])
+    ).set_index("dong_canon")
+    assert not tbl["usage_is_grouped"].any()
+    assert tbl.loc["사직동", "usage_rate"] == pytest.approx(0.4)
+    assert tbl.loc["삼청동", "usage_rate"] == pytest.approx(0.2)
+
+
 def test_build_dong_table_keeps_thin_dong_with_flag():
     """100건 미만 동도 표에는 남는다 — 지우면 '데이터 없음'과 구분이 안 된다."""
     df = _toy_calls([_call(assign=5, board=30)] * 100 + [_call(assign=5, board=30,
@@ -492,9 +547,16 @@ def test_build_dong_table_reproduces_dong_universe(calls, data_dir):
     # 취소 내 구성비는 취소가 있는 동에서 반드시 100%
     shares = tbl[[f"cancel_{k}_share" for k in metrics.CANCEL_KINDS]].sum(axis=1)
     assert (shares[tbl["n_canceled"] > 0] - 1).abs().max() < 1e-9
-    # 인구를 이중 계상하면 붙은 합이 통계 총합을 넘는다
+    # 인구를 이중 계상하면 붙은 합이 통계 총합을 넘는다.
+    # usage_pop 은 그룹 안에서 중복되므로 여기 쓰면 안 된다 — n_disabled 로 잰다.
     pop_total = load.load_disabled_population()["n_disabled"].sum()
     assert tbl["n_disabled"].sum() <= pop_total
+    # 그룹 합산으로 이용률이 살아나 NaN 은 명륜3가동·반포본동 둘만 남는다
+    assert sorted(tbl.loc[tbl["usage_rate"].isna(), "dong_canon"]) == ["명륜3가동", "반포본동"]
+    grp = tbl[tbl["usage_is_grouped"]]
+    assert len(grp) == 24
+    assert all(g["usage_rate"].nunique() == 1
+               for _, g in grp.groupby(["gu", "usage_pop"], observed=True))
 
 
 @pytest.mark.slow

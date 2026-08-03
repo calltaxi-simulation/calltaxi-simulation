@@ -321,28 +321,36 @@ def dong_population(dong_keys: pd.DataFrame, population: pd.DataFrame) -> pd.Dat
     더 잘게 쪼개진 경우(중구 신당1~6동 ↔ 통계 신당동)와 더 뭉뚱그린 경우(강동구
     상일동 ↔ 통계 상일1·2동)가 섞여 있다.
 
-    표준형으로 먼저 맞추고, 남은 건만 기본명(숫자 뗀 이름) 그룹으로 재시도한다.
-    단 **기본명 그룹을 두 개 이상의 동이 다투면 붙이지 않는다** — 신당1~6동처럼
-    콜 쪽이 더 잘면 통계 한 줄을 어떻게 나눌지 근거가 없어서다. 이 규칙으로
-    상일동(10,849콜)·공릉13동(7,725콜)이 살아나고 나머지 16개는 NaN 으로 남는다.
+    **n_disabled 는 그 동 하나에 귀속되는 인구다.** 표준형으로 먼저 맞추고, 남은
+    건만 기본명(숫자 뗀 이름) 그룹으로 재시도하되 **기본명 그룹을 두 개 이상의 동이
+    다투면 붙이지 않는다** — 신당1~6동처럼 콜 쪽이 더 잘면 통계 한 줄을 어떻게
+    나눌지 근거가 없어서다. 이미 표준형으로 붙은 통계 행은 기본명 후보에서 뺀다
+    (공릉2동 이중 계상 방지). 이 컬럼의 합은 통계 총합을 넘지 않는다.
 
-    이미 표준형으로 붙은 통계 행은 기본명 후보에서 뺀다(공릉2동 이중 계상 방지).
+    **pop_group 은 그 동이 속한 기본명 그룹 전체의 인구다.** 위까지 하고도 못 붙은
+    동이 남는 그룹에만 채운다(답십리1~4동 ↔ 통계 답십리1·2동 등). 나누는 게 아니라
+    양쪽을 다 더해 단위를 맞추는 것이라 근거가 있다. 같은 그룹의 동은 같은 값을
+    갖고, 이용률 계산은 build_dong_table 이 콜도 같은 그룹으로 합쳐서 한다.
+    n_disabled 와 달리 그룹 안에서 중복되므로 **합계를 내면 안 된다.**
 
-    반환: gu, dong_canon, n_disabled, pop_match ('canon' / 'base' / NaN)
+    반환: gu, dong_canon, n_disabled, pop_match ('canon' / 'base' / NaN),
+          dong_base, pop_group
     """
     from load import _base_dong  # 동명 정규화 규칙은 load.py 한 곳에서만 정의한다
 
     out = dong_keys[["gu", "dong_canon"]].copy()
+    out["dong_base"] = out["dong_canon"].map(_base_dong)
     exact = population.set_index(["gu", "dong_canon"])["n_disabled"]
     out["n_disabled"] = pd.MultiIndex.from_frame(out[["gu", "dong_canon"]]).map(exact)
     out["pop_match"] = np.where(out["n_disabled"].notna(), "canon", None)
+    out["pop_group"] = np.nan
 
-    todo = out.loc[out["n_disabled"].isna(), ["gu", "dong_canon"]].copy()
+    todo = out.loc[out["n_disabled"].isna(), ["gu", "dong_canon", "dong_base"]].copy()
     if todo.empty:
         return out
 
-    todo["base"] = todo["dong_canon"].map(_base_dong)
-    todo["n_claim"] = todo.groupby(["gu", "base"])["dong_canon"].transform("size")
+    todo["n_claim"] = (todo.groupby(["gu", "dong_base"], observed=True)["dong_canon"]
+                           .transform("size"))
 
     matched = set(zip(out.loc[out["pop_match"] == "canon", "gu"],
                       out.loc[out["pop_match"] == "canon", "dong_canon"]))
@@ -352,9 +360,20 @@ def dong_population(dong_keys: pd.DataFrame, population: pd.DataFrame) -> pd.Dat
     group_sum = free.groupby(["gu", "dong_base"])["n_disabled"].sum(min_count=1)
 
     solo = todo[todo["n_claim"] == 1]
-    vals = pd.MultiIndex.from_frame(solo[["gu", "base"]]).map(group_sum)
+    vals = pd.MultiIndex.from_frame(solo[["gu", "dong_base"]]).map(group_sum)
     out.loc[solo.index, "n_disabled"] = vals
     out.loc[solo.index, "pop_match"] = np.where(pd.notna(vals), "base", None)
+
+    # 여기까지도 못 붙은 동이 있는 그룹 — 통계 쪽 전체를 그룹 인구로 삼는다.
+    # 잔여분(free)이 아니라 그룹 전체다. 답십리3·4동을 살리려면 이미 정확히 붙은
+    # 답십리1·2동의 인구까지 분모에 들어가야 하고, 그러려면 콜도 4개 동을 다 더해야
+    # 한다 — 분자·분모의 단위를 같이 옮기는 것이라 이중 계상이 아니다.
+    left = out.loc[out["n_disabled"].isna(), ["gu", "dong_base"]].drop_duplicates()
+    if not left.empty:
+        whole = population.groupby(["gu", "dong_base"])["n_disabled"].sum(min_count=1)
+        keys = pd.MultiIndex.from_frame(out[["gu", "dong_base"]])
+        in_group = keys.isin(pd.MultiIndex.from_frame(left))
+        out["pop_group"] = np.where(in_group, keys.map(whole), np.nan)
 
     return out
 
@@ -415,7 +434,7 @@ _COLUMN_ORDER = (
     "cancel_immediate_share", "cancel_abandoned_share",
     "cancel_after_assign_share", "cancel_other_share",
     "vehicles_3km", "n_depots_3km",
-    "n_disabled", "pop_match", "usage_rate",
+    "n_disabled", "pop_match", "usage_pop", "usage_is_grouped", "usage_rate",
 )
 
 
@@ -436,7 +455,7 @@ def build_dong_table(calls: pd.DataFrame, *, depots: pd.DataFrame = None,
     콜이 한 건이라도 있는 동은 전부 남기고, 100건 미만은 is_reliable=False 로만
     표시한다 — 지도에서 지워버리면 '데이터가 없는 동'과 구분이 안 된다.
 
-    attrs: n_dong, n_reliable, n_pop_unmatched, pop_unmatched(동 목록)
+    attrs: n_dong, n_reliable, n_pop_unmatched(이용률 NaN 동 수), pop_unmatched(동 목록)
     """
     tbl = dong_demand(calls)
     for part in (dong_wait(calls), dong_ride(calls), dong_cancel(calls)):
@@ -455,9 +474,25 @@ def build_dong_table(calls: pd.DataFrame, *, depots: pd.DataFrame = None,
     if population is not None:
         pop = dong_population(tbl[["gu", "dong_canon"]], population)
         tbl = tbl.merge(pop, on=["gu", "dong_canon"], how="left")
+
         # 이용률 = 연간 접수 콜 ÷ 등록 장애인. 1인당 몇 번 불렀나.
-        tbl["usage_rate"] = tbl["n_calls"] / tbl["n_disabled"].replace(0, np.nan)
-        unmatched = sorted(tbl.loc[tbl["n_disabled"].isna(), "dong_canon"])
+        # 분모는 원칙적으로 그 동의 n_disabled 다. 콜이 통계보다 잘게 쪼개진 그룹만
+        # 분자·분모를 함께 기본명 그룹으로 올려 단위를 맞춘다(usage_is_grouped).
+        # 그룹 안의 동들은 같은 값을 갖는다 — 동 사이를 가를 근거가 원본에 없다.
+        num = tbl["n_calls"].astype(float)
+        tbl["usage_pop"] = tbl["n_disabled"]
+        tbl["usage_is_grouped"] = False
+
+        grouped = tbl["pop_group"].notna()
+        if grouped.any():
+            num[grouped] = (tbl[grouped].groupby(["gu", "dong_base"], observed=True)
+                                        ["n_calls"].transform("sum"))
+            tbl.loc[grouped, "usage_pop"] = tbl.loc[grouped, "pop_group"]
+            tbl.loc[grouped, "usage_is_grouped"] = True
+
+        tbl["usage_rate"] = num / tbl["usage_pop"].replace(0, np.nan)
+        tbl = tbl.drop(columns=["dong_base", "pop_group"])
+        unmatched = sorted(tbl.loc[tbl["usage_rate"].isna(), "dong_canon"])
 
     # depots/population 을 안 넘기면 그쪽 비교는 자연히 빠진다. 그 외의 이름은
     # add_comparisons 가 오타로 보고 튕긴다.
@@ -603,15 +638,6 @@ def gini(values, weights=None) -> float:
     return float(1 - np.sum(w * (prev + cum)) / (w.sum() * total))
 
 
-def standard_compliance(tbl: pd.DataFrame) -> pd.DataFrame:
-    """기준 충족률 — 동별 값이 서비스 기준선을 넘는 비율.
-
-    아직 비워둔다. 기준선(예: '평균 대기 30분 이하')을 먼저 정해야 하는데,
-    build_dong_table 의 wait_total_p50/p90 분포를 확인한 뒤 채운다.
-    """
-    raise NotImplementedError("기준선 미정 — 동별 대기 분포 확인 후 결정")
-
-
 # ─────────────────────────────────────────────────────────────
 # 검증
 # ─────────────────────────────────────────────────────────────
@@ -688,6 +714,12 @@ if __name__ == "__main__":
     print(f"동별 표         {tbl.attrs['n_dong']}개 동 × {tbl.shape[1]}개 지표  "
           f"(신뢰 {tbl.attrs['n_reliable']} / 100건 미만 "
           f"{tbl.attrs['n_dong'] - tbl.attrs['n_reliable']})")
+    n_grouped = int(tbl["usage_is_grouped"].sum())
+    if n_grouped:
+        n_groups = tbl[tbl["usage_is_grouped"]].groupby(
+            ["gu", "usage_pop"], observed=True).ngroups
+        print(f"  이용률 그룹 합산 {n_grouped}개 동 / {n_groups}개 기본명 그룹 "
+              f"(콜이 통계보다 잘게 쪼개진 경우 — 같은 그룹은 같은 값)")
     n_miss = tbl.attrs.get("n_pop_unmatched", 0)
     if n_miss:
         print(f"  ⚠ 장애인 통계 미매칭 {n_miss}개 동 → 이용률 NaN: "

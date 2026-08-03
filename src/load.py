@@ -445,7 +445,7 @@ def load_disabled_population(path: Path = None) -> pd.DataFrame:
     return out[cols].reset_index(drop=True)
 
 
-_VEHICLE_COLS = ["no", "ridetime", "하차일시", "승차거리", "매칭여부"]
+_VEHICLE_COLS = ["차량번호", "승차일시", "하차일시", "승차거리"]
 
 
 def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
@@ -455,9 +455,12 @@ def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
     동A→동B 이동시간 표를 만드는 게 목적이라 출발·목적이 모두 서울인 건만 쓰지만,
     여기서는 서울 밖 운행도 차량이 묶여 있던 시간이라 구를 가리지 않는다.
 
-    필터: 매칭여부 == 'Y'(승차·하차 시각이 다 있는 완료 건), 운행시간 1~120분
+    필터: 승차·하차 시각이 모두 기록된 완료 건, 운행시간 1~120분, 차량번호 있음.
+    차량번호가 비어 있는 건(원본 병합이 차량을 못 붙인 건)은 차량-일 집계의 키가
+    없어 뺀다. 제외 건수는 attrs['n_no_vehicle'] 에 남긴다 — groupby 가 조용히
+    떨어뜨리게 두지 않으려는 것이다.
 
-    차량번호(no)는 884개다. 차고지 정원 합 691대보다 많은데, 1년치라 중간에
+    차량번호는 877개다. 차고지 정원 합 691대보다 많은데, 1년치라 중간에
     교체·증차된 차량이 모두 잡히기 때문이다. 특정 시점의 가동 대수가 아니다.
 
     service_date 는 승차 시각 기준이라 자정을 넘긴 운행은 다음 날로 넘어간다.
@@ -465,20 +468,26 @@ def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
 
     반환 컬럼: vehicle_id, service_date, boarded_at, alighted_at, ride_min, km
     """
-    path = Path(path) if path else DATA_DIR / "calltaxi_2025_병합.csv"
+    path = Path(path) if path else DATA_DIR / "calltaxi_2025_merged.csv"
     df = pd.read_csv(path, encoding="utf-8-sig", usecols=_VEHICLE_COLS, low_memory=False)
     n_raw = len(df)
 
-    df = df[df["매칭여부"].astype(str).str.upper().eq("Y")]
-    board = pd.to_datetime(df["ridetime"], format="ISO8601", errors="coerce")
+    board = pd.to_datetime(df["승차일시"], format="ISO8601", errors="coerce")
     alight = pd.to_datetime(df["하차일시"], format="ISO8601", errors="coerce")
     ride_min = (alight - board).dt.total_seconds() / 60
 
-    ok = ride_min.between(1.0, 120.0) & board.notna()
+    ok = board.notna() & alight.notna() & ride_min.between(1.0, 120.0)
     df, board, alight, ride_min = df[ok], board[ok], alight[ok], ride_min[ok]
 
+    vehicle = pd.to_numeric(df["차량번호"], errors="coerce")
+    has_vehicle = vehicle.notna()
+    n_no_vehicle = int((~has_vehicle).sum())
+    df, board, alight, ride_min, vehicle = (
+        df[has_vehicle], board[has_vehicle], alight[has_vehicle],
+        ride_min[has_vehicle], vehicle[has_vehicle])
+
     out = pd.DataFrame({
-        "vehicle_id": df["no"].to_numpy(),
+        "vehicle_id": vehicle.astype("int64").to_numpy(),
         "service_date": board.dt.normalize().to_numpy(),
         "boarded_at": board.to_numpy(),
         "alighted_at": alight.to_numpy(),
@@ -487,6 +496,7 @@ def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
               .astype("float32").to_numpy(),
     })
     out.attrs["n_raw"] = n_raw
+    out.attrs["n_no_vehicle"] = n_no_vehicle
     return out.reset_index(drop=True)
 
 
