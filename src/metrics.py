@@ -462,7 +462,7 @@ def build_dong_table(calls: pd.DataFrame, *, depots: pd.DataFrame = None,
         tbl = tbl.merge(part, on=["gu", "dong_canon"], how="left")
 
     # 신뢰 기준은 지니와 같은 분모로 잰다 — 승차 완료 건이지 접수 건이 아니다.
-    # 접수 기준으로 재면 창신제3동(접수 108 / 승차 95)처럼 지니에서는 빠진 동이
+    # 접수 기준으로 재면 창신제3동(접수 125 / 승차 95)처럼 지니에서는 빠진 동이
     # 표에서는 신뢰로 잡혀 두 지표의 모집단이 어긋난다.
     tbl["is_reliable"] = tbl["n_served"].fillna(0) >= min_calls
 

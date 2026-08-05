@@ -18,6 +18,8 @@ outputs/*
 !outputs/dong_metrics.csv
 !outputs/vehicle_productivity.csv
 !outputs/dong_demand_matrix.parquet
+!outputs/idle_gaps.csv
+!outputs/idle_by_hour.csv
 # dong_metrics.parquet 은 위 csv 와 같은 내용의 직렬화 중복이라 뺀다 —
 # 바이너리라 diff 가 안 되고 실행할 때마다 새 blob 이 쌓인다.
 

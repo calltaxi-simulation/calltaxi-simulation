@@ -1,0 +1,2 @@
+﻿n_trips,n_vehicles,n_gaps,n_gaps_negative,n_gaps_same_day,n_gaps_cross_day,idle_min_median,idle_min_p90,idle_min_median_same_day,idle_min_p90_same_day,n_days,peak_hour,peak_mean_idle_vehicles
+1468776,877,1467899,117,1268534,199248,9.251141666666667,947.7443216666672,8.003433333333334,45.910314999999976,366,13,167.23772195127455

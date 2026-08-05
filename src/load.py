@@ -423,7 +423,7 @@ def load_disabled_population(path: Path = None) -> pd.DataFrame:
 
     반환 컬럼: gu, dong, dong_canon, dong_base, n_disabled
     """
-    path = Path(path) if path else DATA_DIR / "서울시_장애인_통계_2026_05.csv"
+    path = Path(path) if path else DATA_DIR / "서울시_장애인_통계_2025.csv"
     df = pd.read_csv(path, encoding="utf-8-sig", on_bad_lines="skip", engine="python")
 
     df = df[(df["장애유형별"] == "합계") & (df["성별"] == "계")].copy()
