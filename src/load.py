@@ -57,7 +57,8 @@ IMMEDIATE_TOLERANCE_MIN = 2
 # 대기시간 상한(분). 초과분은 기록 오류로 보고 제외 — 실측 p99가 127분이라 여유를 뒀다.
 MAX_WAIT_MIN = 360
 
-# 2023 경계 기준으로 통폐합된 동. analysis/step3_match.py 와 동일한 판정.
+# 2023 경계 기준으로 통폐합된 동.
+# step3_match.py(저장소 밖 탐색 스크립트, docs/external_sources.md 6절)와 동일한 판정.
 MANUAL_DONG = {
     ("종로구", "명륜3가동"): "혜화동",
     ("동대문구", "용두동"): "용신동",   # 용신동 = 용두동 + 신설동
@@ -371,7 +372,8 @@ def load_candidates(path: Path = None, *, seoul_only: bool = True) -> pd.DataFra
 
     ⚠ 주의: 좌표가 0,0 인 733건은 전부 자치구영(시영여부=N, 이름 접미 '(구)')이다.
     즉 좌표 필터를 걸면 후보지 풀이 시영 1456곳만 남는다. 구영을 후보에
-    포함하려면 analysis/step1_geocode.py 로 주소 지오코딩을 먼저 돌려야 한다.
+    포함하려면 step1_geocode.py(저장소 밖 탐색 스크립트, docs/external_sources.md
+    5절)로 주소 지오코딩을 먼저 돌려야 한다.
     제외 내역은 attrs['n_dropped_no_coord'] / attrs['n_dropped_district_run'] 참조.
 
     반환 컬럼: cand_id, name, address, gu, lot_type, oper_type, capacity,
@@ -503,7 +505,8 @@ def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
 def load_undersupplied(path: Path = None, *, max_vehicles_3km: int = 10) -> pd.DataFrame:
     """과소공급 동(3km내 차량 10대 이하) 로딩.
 
-    동별_거점용량_접근성.csv 는 분석 단계(analysis/step4_distance.py)의 산출물로,
+    동별_거점용량_접근성.csv 는 분석 단계(step4_distance.py — 저장소 밖 탐색
+    스크립트, docs/external_sources.md 6절)의 산출물로,
     동별 실측 대기와 반경별 차량대수를 이미 붙여둔 표다. 기본 임계 10대에서 68개 동.
 
     반환 컬럼: gu, dong, dong_canon, mean_wait, long_wait_ratio, n_calls,

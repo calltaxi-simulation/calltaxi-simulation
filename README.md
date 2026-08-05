@@ -1,7 +1,8 @@
-# 장애인콜택시 대기거점 시뮬레이터
+# 장애인콜택시 대기거점 분석
 
-서울 장애인콜택시 배치안을 평가하는 이산사건 시뮬레이터(DES).
-실무자가 지정한 거점 배치안을 넣으면 대기시간·형평·비용 지표를 산출한다.
+서울 장애인콜택시 운영을 실측 데이터로 진단하고, 대기거점 배치안 평가를 위한
+이산사건 시뮬레이터(DES)를 설계 중인 저장소다. 현재 진단 파이프라인
+(load / travel_time / metrics / idle)은 동작하며, 배차 엔진은 미구현이다.
 
 ## 환경 설정
 
@@ -88,18 +89,22 @@ python src/travel_time.py
 # 동별 진단 지표 산출 (outputs/ 에 저장 → 전체값을 검증 기준과 대조)
 python src/metrics.py
 
-# 시뮬 실행 (현행 배치 재현 → 검증)
-python src/simulator.py
-
 # 유휴 구간 산출 (하차 → 다음 배차)
 python src/idle.py
-
-# 대시보드
-streamlit run src/dashboard.py
 
 # 테스트 (코드 점검)
 pytest
 pytest -m "not slow"    # 대용량 CSV를 읽는 테스트 제외
+```
+
+아래 둘은 **구현 예정**이다. 지금 실행하면 `NotImplementedError` 로 멈춘다.
+
+```bash
+# 시뮬 실행 (현행 배치 재현 → 검증)  ── 구현 예정
+python src/simulator.py
+
+# 대시보드  ── 구현 예정
+streamlit run src/dashboard.py
 ```
 
 ## 구조
