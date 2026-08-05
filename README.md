@@ -19,10 +19,40 @@ source .venv/bin/activate       # macOS/Linux
 pip install -r requirements.txt
 ```
 
-**pandas 는 2.x 로 고정한다.** 3.0 은 copy-on-write 기본화 등 동작이 달라
-같은 코드에서도 결과가 갈릴 수 있어 `requirements.txt` 에 상한을 뒀다.
+**pandas 는 2.x 로 고정한다.** `requirements.txt` 가 `pandas>=2.0,<3.0` 으로 상한을 둔다.
 
-검증된 조합: Python 3.14.3 / pandas 2.3.3 / numpy 2.5.1 / geopandas 1.1.4 / simpy 4.1.2
+pandas 3.0 은 **copy-on-write 를 기본으로 켠다.** 그러면 사본에 대한 연쇄 대입으로
+동작하던 코드가 원본을 더 이상 바꾸지 않게 되고, `.loc` 대입·`assign` 후 view/copy
+여부에 따라 **같은 코드에서 결과가 갈릴 수 있다.** 이 저장소는
+`load._prepare_chunk()` 의 `df.loc[bad, "wait_min"] = np.nan`,
+`metrics.dong_population()` 의 `out.loc[solo.index, ...]` 처럼 슬라이스에 직접
+대입하는 자리가 여러 곳이라 영향을 받는다. 값이 어긋나면 검증 6개 대조가 조용히
+통과하거나 조용히 틀릴 수 있어 2.x 안에서만 재현한다.
+
+전역 파이썬이 아니라 `.venv` 를 쓰는 이유도 같다 — 전역 환경의 pandas 가 이 핀을
+위반할 수 있다.
+
+### 검증된 조합
+
+실제로 설치돼 아래 산출값을 낸 버전이다.
+
+| 항목 | 값 |
+|---|---|
+| OS | Windows 11, 빌드 **10.0.26200** (AMD64) |
+| Python | **3.14.3** (`tags/v3.14.3:323c59a`, MSC v.1944 64bit) |
+
+| 패키지 | 핀 | 설치 | 패키지 | 핀 | 설치 |
+|---|---|---|---|---|---|
+| pandas | `>=2.0,<3.0` | **2.3.3** | scipy | `>=1.11` | 1.18.0 |
+| numpy | `>=1.24,<3.0` | **2.5.1** | streamlit | `>=1.30` | 1.60.0 |
+| geopandas | `>=0.14` | **1.1.4** | matplotlib | `>=3.7` | 3.11.1 |
+| shapely | `>=2.0` | 2.1.2 | pyarrow | `>=14.0` | 24.0.0 |
+| pyogrio | `>=0.7` | 0.13.0 | pytest | `>=7.4` | 9.1.1 |
+| pyproj | `>=3.6` | 3.7.2 | jupyter | — | 설치됨 |
+| **simpy** | `>=4.0` | **4.1.2** | | | |
+
+SimPy 는 DES 엔진이다. 이벤트 처리 방식·난수 생성기는
+[docs/model_flow.md](docs/model_flow.md#엔진난수) 참조.
 
 ## 데이터 배치
 
@@ -62,7 +92,7 @@ python src/metrics.py
 python src/simulator.py
 
 # 유휴 구간 산출 (하차 → 다음 배차)
-python analysis/step7_idle.py
+python src/idle.py
 
 # 대시보드
 streamlit run src/dashboard.py
@@ -77,29 +107,25 @@ pytest -m "not slow"    # 대용량 CSV를 읽는 테스트 제외
 ```
 simulation/
 ├ requirements.txt  # 실행 환경(venv + pip)
-├ analysis/
-│  └ step7_idle.py   # 유휴 구간 산출(하차 → 다음 배차)
 ├ src/
 │  ├ load.py         # 데이터 로딩·전처리
 │  ├ travel_time.py  # 이동시간 테이블(실측 OD + 거리 보조)
-│  ├ simulator.py    # 시뮬 엔진(SimPy)
 │  ├ metrics.py      # 동별 진단 지표(대기·차내·미이행·수요·공급·형평)
+│  ├ idle.py         # 유휴 구간(하차 → 다음 배차)
+│  ├ simulator.py    # 시뮬 엔진(SimPy)
 │  └ dashboard.py    # Streamlit
 ├ docs/
-│  ├ calibration.md      # 필터 정의·지표 정의·타깃 근거·데이터 한계
-│  ├ provenance.md       # 수치별 산출 근거(파일 → 전처리 → 정의)
-│  ├ stress_checklist.md # STRESS-DES 보고 표준 충족 현황
-│  ├ data_sources.md     # 데이터 출처(STRESS 3.1)
-│  ├ preprocessing_log.md# 전처리 로그(STRESS 3.2)
-│  ├ model_flow.md       # 모델 흐름도(STRESS 2.1)
-│  └ tech_stack.md       # 기술 스택·난수(STRESS 5.1·5.2)
+│  ├ calibration.md      # 정본 — 모듈별 필터·지표 정의·타깃 근거·한계
+│  ├ provenance.md       # 산출값 대장(스크립트를 돌려 얻은 현재 값)
+│  ├ model_flow.md       # 시뮬 설계 — 흐름도·조 편성·엔진·난수
+│  └ external_sources.md # 코드 밖 근거 — 문헌·구술·소급 기록·저장소 밖 자료
 ├ tests/            # pytest
 ├ cache/            # 콜 원본 parquet 캐시(자동 생성, git 제외)
 └ outputs/          # 결과
    ├ dong_metrics.csv/.parquet   # 동별 지표 표(432개 동) — 대시보드가 읽는다
    ├ dong_demand_matrix.parquet  # 동 × 시간대 × 평일/주말 콜 수
    ├ vehicle_productivity.csv    # 차량 생산성 요약(동별 아님)
-   ├ idle_gaps.csv               # 유휴 구간 요약 — analysis/step7_idle.py 산출
+   ├ idle_gaps.csv               # 유휴 구간 요약 — src/idle.py 산출
    └ idle_by_hour.csv            # 시간대별 평균 동시 유휴 차량 수
 ```
 

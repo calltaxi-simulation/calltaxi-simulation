@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""step7_idle.py — 차량 유휴 구간 산출
+"""idle.py — 차량 유휴 구간 산출
 
 차량이 콜에 묶이지 않고 비어 있던 구간을 실측에서 뽑는다.
 
@@ -12,13 +12,13 @@
 
 입력  calltaxi_2025_merged.csv (차량번호 병합본)
 필터  승차·하차 시각이 모두 기록된 완료 운행 + 배차 시각 기록 + 차량번호 있음
-      (simulation/src/load.py 의 load_vehicle_trips 와 같은 기준에 배차 시각 조건을 더한 것)
+      (load.load_vehicle_trips 와 같은 기준에 배차 시각 조건을 더한 것)
 
 산출  유휴 구간 건수 / 길이 분포(중앙·p90) / 시간대별 동시 유휴 차량 수
-      simulation/outputs/idle_gaps.csv, idle_by_hour.csv
+      outputs/idle_gaps.csv, outputs/idle_by_hour.csv
 
 실행 (저장소 루트에서)
-    .venv/Scripts/python.exe analysis/step7_idle.py
+    .venv/Scripts/python.exe src/idle.py
 
 데이터 폴더는 환경변수 DATA_DIR 이 있으면 그쪽, 없으면 저장소 상위의 ../data/ 다
 (load.resolve_data_dir 과 같은 규칙).
