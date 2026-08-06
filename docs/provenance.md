@@ -288,11 +288,37 @@ cd simulation
 분포 전체와 시간대 24행은 [calibration.md 유휴 구간 절](calibration.md) 에 있다.
 산출물은 `outputs/idle_gaps.csv`, `outputs/idle_by_hour.csv`.
 
-## 10. 시뮬레이터
+## 10. `python src/patience.py` 출력
+
+콜 인내심의 Kaplan-Meier 추정(가정 A-14). 시뮬 이탈 로직의 입력이다.
+
+| 항목 | 값 |
+|---|---|
+| 모집단 (즉시콜·서울) | 1,527,213건 |
+| 즉시 취소 (제외) | **38,586건 = 2.53%** |
+| 취소시각 결측 (제외) | 24건 |
+| 분석 대상 | **1,488,602건** |
+| — 이벤트(포기) | **104,434건** |
+| — 절단(배차받음) | **1,384,168건** |
+| KM 중앙 | **211.0분** |
+| 순진 중앙 (취소자만) | **16.8분** — 12.5배 차이(생존편향) |
+| 누적 포기 5·10·20·30분 | 1.99% / 3.34% / 6.04% / 8.95% |
+| 누적 포기 45·60·90분 | 13.62% / 18.01% / 26.15% |
+| 대기 중 포기 비율 | **6.84%** (104,434 / 1,527,213) — 시뮬 검증 기준 |
+| 위험집합 60 / 90 / 180분 | 129,093 / 25,295 / 475 |
+
+추정 방법·한계는 [calibration.md 인내심 절](calibration.md) 에 있다.
+산출물은 `outputs/patience_km.csv`(0.5분 격자), `outputs/patience_summary.csv`.
+
+## 11. 시뮬레이터
 
 `src/simulator.py` 는 **뼈대만 있고 구현되지 않았다**(`raise NotImplementedError`).
-`src/dashboard.py` 도 같다. 따라서 **before/after 비교값·배치안 평가 결과는
-아직 산출된 것이 없다.** 위 수치는 전부 실측 진단값이다.
+따라서 **before/after 비교값·배치안 평가 결과는 아직 산출된 것이 없다.**
+위 수치는 전부 실측 진단값이다.
+
+`src/dashboard.py` 는 구현돼 있으나 **실측 지표를 보여줄 뿐 새 값을 만들지 않는다**
+(입력은 `outputs/dong_metrics.csv` 등). 화면 결정은
+[dashboard_spec.md](dashboard_spec.md) 참조.
 
 정의된 상수만 있다: `SEED = 42`, `DISPATCH_RADIUS_DAY = 7km`,
 `DISPATCH_RADIUS_NIGHT = 12km`(자동배차 탐색 반경 — 출처 확인 필요, 미확정).

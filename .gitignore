@@ -20,6 +20,10 @@ outputs/*
 !outputs/dong_demand_matrix.parquet
 !outputs/idle_gaps.csv
 !outputs/idle_by_hour.csv
+!outputs/patience_km.csv
+!outputs/patience_summary.csv
+# patience_km.csv 는 0.5분 격자로 눌러 42KB 다. 이벤트 시점 8만 개를 그대로
+# 두면 5MB 가 넘어 저장소에 넣을 수 없다(src/patience.py 의 km_grid 참조).
 # dong_metrics.parquet 은 위 csv 와 같은 내용의 직렬화 중복이라 뺀다 —
 # 바이너리라 diff 가 안 되고 실행할 때마다 새 blob 이 쌓인다.
 
