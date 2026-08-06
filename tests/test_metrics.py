@@ -449,7 +449,7 @@ def test_compare_cols_default_exists_in_built_table():
 
 
 # ─────────────────────────────────────────────────────────────
-# 차량 생산성
+# 차량-일 집계 (조 편성 실측 재구성의 입력 — A-09)
 # ─────────────────────────────────────────────────────────────
 
 def _trips(rows):
@@ -463,23 +463,26 @@ def _trips(rows):
     return pd.DataFrame(out)
 
 
-def test_vehicle_productivity_basic():
-    """9시~13시(4시간) 가동에 2건, 실차 120분 → 실차율 0.5, 시간당 0.5건."""
-    prod = metrics.vehicle_productivity(_trips([(1, 0, 60), (1, 180, 60)]))
-    assert prod["n_vehicles"] == 1 and prod["n_vehicle_days"] == 1
-    assert prod["trips_per_day"] == pytest.approx(2.0)
-    assert prod["trips_per_hour"] == pytest.approx(0.5)
-    assert prod["occupied_ratio"] == pytest.approx(0.5)
+def test_vehicle_day_table_span_and_counts():
+    """첫 승차~마지막 하차가 span 이다 — 9시 승차, 13시 하차면 4시간.
+
+    조 편성이 이 span 에서 근무 길이를 역추정하므로(A-09) 정의가 바뀌면 안 된다.
+    """
+    vd = metrics.vehicle_day_table(_trips([(1, 0, 60), (1, 180, 60)]))
+    assert len(vd) == 1
+    r = vd.iloc[0]
+    assert r["trips"] == 2
+    assert r["occupied_min"] == pytest.approx(120.0)
+    assert r["span_h"] == pytest.approx(4.0)
 
 
-def test_vehicle_productivity_drops_degenerate_days():
-    """운행 1건뿐인 날은 span 이 짧아 시간당 통행이 발산한다 — 비율에서 뺀다."""
-    trips = pd.concat([_trips([(1, 0, 60), (1, 180, 60)]), _trips([(2, 0, 10)])])
-    prod = metrics.vehicle_productivity(trips)
-    assert prod["n_vehicle_days"] == 2
-    assert prod["n_vehicle_days_dropped"] == 1
-    assert prod["trips_per_hour"] == pytest.approx(0.5)    # 차량 2 제외
-    assert prod["trips_per_day"] == pytest.approx(1.5)     # 건수 평균은 전부 포함
+def test_vehicle_day_table_splits_by_vehicle_and_date():
+    """차량-일이 키다 — 차량이 다르면 다른 행."""
+    vd = metrics.vehicle_day_table(
+        pd.concat([_trips([(1, 0, 60), (1, 180, 60)]), _trips([(2, 0, 10)])]))
+    assert len(vd) == 2
+    assert set(vd["vehicle_id"]) == {1, 2}
+    assert vd.loc[vd["vehicle_id"] == 2, "span_h"].iloc[0] == pytest.approx(10 / 60)
 
 
 # ─────────────────────────────────────────────────────────────

@@ -3,34 +3,25 @@
 
 시뮬 이탈 로직의 입력이다. 대기열에 있는 콜이 언제 포기하는지를 실측에서 뽑는다.
 
-왜 Kaplan-Meier 인가
-    취소한 사람은 인내심을 알지만, 차를 탄 사람은 "그 대기시간 이상"이라는 것만 안다.
-    취소 건만 세면 성질 급한 표본만 남아 인내심이 짧게 추정된다(생존편향).
-    승차 완료 건을 **우측절단**으로 넣어야 한다. 편향 크기는 main() 이 함께 출력한다.
+승차 완료 건을 우측절단으로 넣어 Kaplan-Meier 로 추정한다 — 취소자만 세면 생존편향이
+생긴다. 근거와 편향 크기는 가정 A-14(docs/assa_log.md).
 
-정의 (가정 A-14, 정의는 docs/assa_log.md)
+정의
     모집단   즉시콜(|예정−접수| ≤ 2분) + 출발구 서울 25구 = load.load_calls()
     제외     즉시 취소 — 배차 전 취소 중 (취소−접수) ≤ 1분.
              인내심이 아니라 오조작·변심이라 접수 시점의 외생 확률로 따로 처리한다.
+             취소 시각이 결측이라 즉시/포기를 가를 수 없는 건(cancel_kind 의
+             'other')도 duration 을 만들 수 없어 뺀다.
     이벤트   배차 전 취소(포기).      duration = 취소 − 접수
     절단     배차받음.                duration = 배차 − 접수
              배차 후 미승차도 절단이다 — 배차까지는 기다렸다는 사실이 관측됐다.
     범위     duration 0~600분
 
-    취소 시각이 결측이라 즉시/포기를 가를 수 없는 건(cancel_kind 의 'other')은
-    duration 자체를 만들 수 없어 뺀다.
-
-산출  outputs/patience_km.csv   생존곡선 (timeline, survival, cum_abandon, ...)
+산출  outputs/patience_km.csv   생존곡선 (timeline, survival, cum_abandon, n_at_risk)
       outputs/patience_summary.csv  요약 1행
-
-KM 은 공변량 없는 우측절단 추정이라 곱셈 한 줄이면 된다. lifelines 를 쓰지 않는
-이유는 docs/calibration.md 인내심 절 참조 — 본체 의존성을 늘리지 않으려는 것이다.
 
 실행 (저장소 루트에서)
     .venv/Scripts/python.exe src/patience.py
-
-데이터 폴더는 환경변수 DATA_DIR 이 있으면 그쪽, 없으면 저장소 상위의 ../data/ 다
-(load.resolve_data_dir 과 같은 규칙).
 """
 import sys
 from pathlib import Path

@@ -16,7 +16,6 @@ outputs/*
 # 없고, 대시보드가 이 파일들을 읽는다. 위 *.csv / *.parquet 규칙보다 뒤에 와야
 # 예외가 먹는다(마지막에 일치하는 패턴이 이긴다).
 !outputs/dong_metrics.csv
-!outputs/vehicle_productivity.csv
 !outputs/dong_demand_matrix.parquet
 !outputs/idle_gaps.csv
 !outputs/idle_by_hour.csv

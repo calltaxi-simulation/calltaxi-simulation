@@ -511,14 +511,18 @@ def build_dong_table(calls: pd.DataFrame, *, depots: pd.DataFrame = None,
 
 
 # ─────────────────────────────────────────────────────────────
-# 차량 생산성 (동별 아님 — 차량 단위 요약)
+# 차량-일 집계 (동별 아님 — 조 편성 실측 재구성의 입력, 가정 A-09)
 # ─────────────────────────────────────────────────────────────
 
 def vehicle_day_table(trips: pd.DataFrame) -> pd.DataFrame:
     """차량-일 단위 집계. trips 는 load.load_vehicle_trips() 형식.
 
     가동시간은 그날 첫 승차 ~ 마지막 하차 구간(span)으로 잡는다. 배차를 기다리며
-    서 있던 시간은 운행 기록에 안 남아 이 방법 말고는 알 길이 없다.
+    서 있던 시간은 운행 기록에 안 남아 이 방법 말고는 알 길이 없다. 그래서 실제
+    출차는 이보다 이르고 귀고는 이보다 늦다.
+
+    조별 출차 시각·근무 길이를 실측에서 역추정하는 데 쓴다(A-09 —
+    docs/model_flow.md 조 편성 절).
 
     반환 컬럼: vehicle_id, service_date, trips, occupied_min, span_h
     """
@@ -528,36 +532,6 @@ def vehicle_day_table(trips: pd.DataFrame) -> pd.DataFrame:
     out["span_h"] = (out["last_alight"] - out["first_board"]).dt.total_seconds() / 3600
     return out.reset_index()[["vehicle_id", "service_date", "trips",
                               "occupied_min", "span_h"]]
-
-
-def vehicle_productivity(trips: pd.DataFrame, *, min_span_h: float = 0.5) -> dict:
-    """차량 생산성 요약(전체 차량 평균).
-
-      trips_per_day    차량 하루 처리 콜 수
-      trips_per_hour   가동 1시간당 처리 콜 수
-      occupied_ratio   실차율 = 실차 시간(승차~하차) ÷ 가동 시간
-
-    ⚠ **실차율은 상한으로 읽어야 한다.** 가동시간을 첫 승차~마지막 하차로 잡아서
-    출근 후 첫 콜을 받기까지, 마지막 하차 뒤 퇴근까지의 유휴가 분모에서 빠진다.
-    반대로 기사 휴게는 분모에 그대로 들어가 값을 낮추는 쪽으로 작용하는데, 둘을
-    가를 근거가 원본에 없다. 정확한 가동시간은 배차 로그가 있어야 나온다.
-
-    차량 수는 1년 누계라 특정 시점 가동 대수가 아니다(load_vehicle_trips 참조).
-    운행이 1건뿐인 날은 span 이 0에 가까워 시간당 통행이 발산한다 — min_span_h
-    미만인 차량-일은 비율 계산에서 뺀다(건수는 n_vehicle_days_dropped 로 남긴다).
-    """
-    vd = vehicle_day_table(trips)
-    ok = vd[vd["span_h"] >= min_span_h]
-
-    return {
-        "n_vehicles": int(vd["vehicle_id"].nunique()),
-        "n_vehicle_days": int(len(vd)),
-        "n_trips": int(vd["trips"].sum()),
-        "trips_per_day": float(vd["trips"].mean()),
-        "trips_per_hour": float((ok["trips"] / ok["span_h"]).mean()),
-        "occupied_ratio": float((ok["occupied_min"] / 60 / ok["span_h"]).mean()),
-        "n_vehicle_days_dropped": int(len(vd) - len(ok)),
-    }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -731,16 +705,6 @@ if __name__ == "__main__":
     tbl.to_csv(OUT_DIR / "dong_metrics.csv", index=False, encoding="utf-8-sig")
     tbl.to_parquet(OUT_DIR / "dong_metrics.parquet", index=False)
     matrix.to_parquet(OUT_DIR / "dong_demand_matrix.parquet", index=False)
-
-    print("\n차량 운행 로딩 중...")
-    prod = vehicle_productivity(load.load_vehicle_trips())
-    pd.DataFrame([prod]).to_csv(OUT_DIR / "vehicle_productivity.csv",
-                                index=False, encoding="utf-8-sig")
-    print(f"차량 생산성     차량 {prod['n_vehicles']}대 / "
-          f"가동일 {prod['n_vehicle_days']:,}일 / 운행 {prod['n_trips']:,}건")
-    print(f"  하루 통행     {prod['trips_per_day']:.2f}건/대")
-    print(f"  시간당 통행   {prod['trips_per_hour']:.2f}건/대")
-    print(f"  실차율        {prod['occupied_ratio']:.1%}  (상한 — docstring 참조)")
 
     print(f"\n저장: {OUT_DIR}")
 

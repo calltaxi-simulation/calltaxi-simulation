@@ -259,27 +259,27 @@ cd simulation
   - 8시 평일 — 결측 0, 범위 2.6~111.8분, 순위 비중 speed 98.1% / od 1.7% / intra 0.2%
   - 2시 주말 — 결측 0, 범위 2.3~60.9분, 순위 비중 speed 99.7% / intra 0.2% / od 0.0%
 
-## 8. 차량 생산성 (`metrics.vehicle_productivity`)
+## 8. 조 편성 실측 (`load.load_vehicle_trips` → `metrics.vehicle_day_table`)
+
+가정 A-09(거점 시차 운행)의 근거값이다. 조별 분포표와 해석은
+[model_flow.md 조 편성 절](model_flow.md) 에 있다.
 
 | 항목 | 값 |
 |---|---|
 | 원본 | 1,729,476행 |
-| 필터 후 운행 | **1,464,368건** |
+| 필터 후 운행 | **1,464,368건** (승차·하차 기록 + 운행 1~120분 + 차량번호 있음) |
 | 차량번호 없어 제외 | 14,459건 (완료 운행의 0.98%) |
-| 차량 수 | **877대** (1년 누계) |
-| 차량-일 | **202,880일** |
-| 하루 통행 | **7.2179건/대** |
-| 시간당 통행 | **1.0721건/대** |
-| 실차율 | **46.38%** (상한 — 근거는 calibration.md) |
-| 비율 계산에서 뺀 차량-일 | 701일 (`span_h < 0.5`) |
-| 차량-일 `span_h` 중앙 | 6.95시간 |
+| 차량 수 | **877대** (1년 누계 — 특정 시점 가동 대수가 아니다) |
+| **차량-일** | **202,880일** |
+| 차량-일 `span_h` 중앙 | **6.95시간** (사분위 5.66~7.91) |
 | 차량-일 운행건수 중앙 | 7건 |
+| 첫 운행 시각 분포 | 07시 **25.7%** / 08시 **20.8%** / 10시 **11.8%** / 12시 **19.9%** / 13시 **5.0%** |
 
 ## 9. `python src/idle.py` 출력
 
 | 항목 | 값 |
 |---|---|
-| 필터 후 운행 | **1,468,776건** (차량 생산성과 필터가 다르다 — 운행시간 컷 없음) |
+| 필터 후 운행 | **1,468,776건** (8절과 필터가 다르다 — 운행시간 컷 없음) |
 | 유휴 구간 | **1,467,899건** |
 | 당일 내 / 자정 넘김 | 1,268,534 / 199,248 |
 | 당일 내 구간 중앙 · p90 | **8.0분 / 45.9분** |
@@ -314,7 +314,15 @@ cd simulation
 
 `src/simulator.py` 는 **뼈대만 있고 구현되지 않았다**(`raise NotImplementedError`).
 따라서 **before/after 비교값·배치안 평가 결과는 아직 산출된 것이 없다.**
-위 수치는 전부 실측 진단값이다.
+
+위 수치의 성격은 두 갈래다.
+
+| 갈래 | 해당 | 성격 |
+|---|---|---|
+| **실측 집계값** | 1~9절 | 원본을 필터·집계해 센 값. 같은 원본이면 같은 값이 나온다 |
+| **실측에서 추정한 값** | **10절 인내심 곡선** | 관측(포기 104,434 · 절단 138.4만)에 Kaplan-Meier 를 적용한 **추정치**다. 표본에 딸린 불확실성이 있고 꼬리는 특히 얇다(중앙 211분 지점의 위험집합 141건) |
+
+**시뮬 산출값은 아직 없다.** 10절을 시뮬 결과로 읽지 말 것 — 그것은 시뮬의 **입력**이다.
 
 `src/dashboard.py` 는 구현돼 있으나 **실측 지표를 보여줄 뿐 새 값을 만들지 않는다**
 (입력은 `outputs/dong_metrics.csv` 등). 화면 결정은
@@ -337,7 +345,7 @@ cd simulation
 | 이용률 | `dong_population()`, `build_dong_table()` | `metrics` |
 | 구/서울 대비 | `add_comparisons()` | `metrics` |
 | 지니 | `dong_wait_table()`, `dong_gini()`, `gini()` | `metrics` |
-| 차량 생산성 | `vehicle_day_table()`, `vehicle_productivity()` | `metrics` |
+| 조 편성(차량-일) | `vehicle_day_table()` | `metrics` |
 | 검증 6개 | `overall_metrics()`, `compare_to_target()` | `metrics` |
 | 이동시간 | `TravelTime.lookup()`, `lookup_many()`, `get_travel_time()` | `travel_time` |
 | 이동시간 테이블 | `build_od_table()`, `build_speed_table()`, `build_profile_table()` | `travel_time` |
@@ -346,3 +354,4 @@ cd simulation
 | 운행 로딩 | `load_rides()`, `load_vehicle_trips()` | `travel_time`, `load` |
 | 거점·후보지·인구 | `load_depots()`, `load_candidates()`, `load_disabled_population()` | `load` |
 | 유휴 구간 | `load_trips()`, `build_gaps()`, `hourly_concurrency()` | `idle` |
+| 인내심 곡선 | `build_observations()`, `kaplan_meier()`, `km_grid()` | `patience` |

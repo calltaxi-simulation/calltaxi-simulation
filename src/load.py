@@ -451,7 +451,7 @@ _VEHICLE_COLS = ["차량번호", "승차일시", "하차일시", "승차거리"]
 
 
 def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
-    """차량별 운행 기록. 차량 생산성(시간당 통행·실차율) 산출용.
+    """차량별 운행 기록. 조 편성 실측 재구성용(A-09 — metrics.vehicle_day_table).
 
     travel_time.load_rides 와 같은 원본이지만 목적이 달라 필터가 다르다. 저쪽은
     동A→동B 이동시간 표를 만드는 게 목적이라 출발·목적이 모두 서울인 건만 쓰지만,

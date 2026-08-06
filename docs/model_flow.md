@@ -47,9 +47,9 @@ flowchart TD
 
 ## 조 편성 (실측 재구성, 차량-일 20.3만 건)
 
-차량의 진입 시각과 근무 길이는 가정이 아니라 실측에서 역추정한 값이다.
-`calltaxi_2025_merged.csv` → `load.load_vehicle_trips()` → `metrics.vehicle_day_table()`
-로 만든 **차량-일 202,880건**의 첫 승차·마지막 하차 분포다.
+차량의 진입 시각과 근무 길이는 가정이 아니라 실측에서 역추정한 값이다(가정 A-09).
+**차량-일 202,880건**의 첫 승차·마지막 하차 분포이며, 산출 경로와 필터별 잔존 건수는
+[provenance.md 8절](provenance.md) 에 있다.
 
 | 조 | 출차 시각 | 차량-일 비중 | 조별 종료 중앙 |
 |---|---|---|---|
@@ -85,7 +85,7 @@ flowchart TD
 | **운행** | `travel_time.get_travel_time()` — 승차지 동 → 목적지 동. 공차 이동과 같은 테이블을 쓴다 | 구현됨 |
 | **하차** | `CallTaxiSim.vehicle_process()` | **미구현** |
 | **하차지 인근 제자리 대기** | `CallTaxiSim.vehicle_process()` — 가정 A-01(유휴 차량 = 제자리 대기, 배차 콜이 타지역이면 공차 이동) | **미구현** |
-| **취소 · 이탈** | 실측 판정은 `metrics.cancel_kind()` — 배차 전 + 1분 초과 취소를 `abandoned`(대기 중 포기)로 분류. 시뮬의 인내심 분포는 미정 | 실측 분류는 구현됨. 시뮬 이탈 로직은 **미구현** |
+| **취소 · 이탈** | **실측 분류** `metrics.cancel_kind()` — 배차 전 + 1분 초과 취소를 `abandoned`(대기 중 포기)로 분류. **시뮬 샘플링** `outputs/patience_km.csv` — 인내심 KM 생존곡선에서 역CDF로 뽑는다(가정 A-14, `src/patience.py`). 즉시 취소는 곡선과 별개로 접수 시점의 외생 확률 2.53% | 실측 분류·인내심 곡선 구현됨. **이탈 로직 자체는 미구현** — 곡선을 대기열에 물리는 코드가 없다 |
 | **차고지 복귀** | `CallTaxiSim.vehicle_process()` | **미구현** |
 | **하루 실행·로그 산출** | `CallTaxiSim.run()`, `run_placement(placement, calls, depots, travel_time, seed)` | **미구현** |
 | **결과 채점** | `metrics.overall_metrics()` → `metrics.compare_to_target()` — 검증 6개 대조. 시뮬 로그도 실측 콜과 같은 함수를 통과한다 | 구현됨 |
@@ -94,7 +94,10 @@ flowchart TD
 
 `src/simulator.py` 는 **뼈대만 있다.** `CallTaxiSim.__init__`, `dispatch`,
 `vehicle_process`, `run`, `run_placement` 이 모두 `raise NotImplementedError` 다.
-`src/dashboard.py` 도 같다.
+
+`src/dashboard.py` 는 **진단 화면이 동작한다** — 동별 실측 지표를 지도·패널로 보여준다.
+시뮬 배치안을 다루는 3페이지만 자리를 잡아 두고 비어 있다
+([dashboard_spec.md](dashboard_spec.md)).
 
 즉 위 흐름도에서 **입력(콜·거점·이동시간)과 출력(지표 채점)은 구현돼 있고,
 가운데 배차·운행 엔진이 비어 있다.** 배치안 평가 결과·before/after 비교값은 아직
