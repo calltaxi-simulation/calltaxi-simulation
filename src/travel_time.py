@@ -10,6 +10,8 @@ get_travel_time(출발동, 목적동, hour, is_weekend) -> float
   3순위 근사   위와 같되 시간대 평균속도 사용
   동내부/무좌표는 각각 동일-동 중앙값·전체 중앙값으로 처리
 
+이 산출 방식이 결정기록 D-21 이다(정의는 docs/external_sources.md 2절).
+
 시간대 5구간 × 평일/주말 = 10프로필. load.py의 4구간과 기준이 다르니 섞지 말 것.
 DETOUR(우회계수)를 2순위에도 곱하는 이유·거리대 5구간 근거·커버율 등
 상세는 docs/calibration.md 참조.
