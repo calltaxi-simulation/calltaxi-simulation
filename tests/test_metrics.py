@@ -66,7 +66,7 @@ def test_gini_empty_is_nan():
 
 
 # ─────────────────────────────────────────────────────────────
-# 동별 집계 · D-04
+# 동별 집계 · A-12
 # ─────────────────────────────────────────────────────────────
 
 def _toy_log(counts):
@@ -86,7 +86,7 @@ def test_dong_table_applies_min_calls():
 
 
 def test_dong_table_boundary_is_inclusive():
-    """정확히 100건인 동은 남아야 한다(D-04 는 '100건 미만' 제외)."""
+    """정확히 100건인 동은 남아야 한다(A-12 는 '100건 미만' 제외)."""
     log = _toy_log({("A구", "경계동"): 100})
     assert len(metrics.dong_wait_table(log)) == 1
 
@@ -114,7 +114,7 @@ def calls(data_dir):
 
 @pytest.mark.slow
 def test_dong_count_matches_original_analysis(calls):
-    """D-04 적용 시 원본 분석과 같은 430개 동이 남아야 한다."""
+    """A-12 적용 시 원본 분석과 같은 430개 동이 남아야 한다."""
     tbl = metrics.dong_wait_table(calls)
     assert len(tbl) == 430
     excluded = set(tbl.attrs["excluded"]["dong"])
@@ -536,7 +536,7 @@ def test_build_dong_table_keeps_thin_dong_with_flag():
 
 @pytest.mark.slow
 def test_build_dong_table_reproduces_dong_universe(calls, data_dir):
-    """실측으로 조립했을 때 동 수·신뢰 동 수가 D-04 와 맞는지."""
+    """실측으로 조립했을 때 동 수·신뢰 동 수가 A-12 와 맞는지."""
     tbl = metrics.build_dong_table(calls, depots=load.load_depots(),
                                    population=load.load_disabled_population())
     assert tbl.attrs["n_dong"] == 432

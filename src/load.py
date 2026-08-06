@@ -58,7 +58,7 @@ IMMEDIATE_TOLERANCE_MIN = 2
 MAX_WAIT_MIN = 360
 
 # 2023 경계 기준으로 통폐합된 동.
-# step3_match.py(저장소 밖 탐색 스크립트, docs/external_sources.md 6절)와 동일한 판정.
+# step3_match.py(저장소 밖 탐색 스크립트, docs/external_sources.md 5절)와 동일한 판정.
 MANUAL_DONG = {
     ("종로구", "명륜3가동"): "혜화동",
     ("동대문구", "용두동"): "용신동",   # 용신동 = 용두동 + 신설동
@@ -506,7 +506,7 @@ def load_undersupplied(path: Path = None, *, max_vehicles_3km: int = 10) -> pd.D
     """과소공급 동(3km내 차량 10대 이하) 로딩.
 
     동별_거점용량_접근성.csv 는 분석 단계(step4_distance.py — 저장소 밖 탐색
-    스크립트, docs/external_sources.md 6절)의 산출물로,
+    스크립트, docs/external_sources.md 5절)의 산출물로,
     동별 실측 대기와 반경별 차량대수를 이미 붙여둔 표다. 기본 임계 10대에서 68개 동.
 
     반환 컬럼: gu, dong, dong_canon, mean_wait, long_wait_ratio, n_calls,
