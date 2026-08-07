@@ -58,6 +58,13 @@ GREY_DARK = "#8B8880"      # 회색조 상단
 NO_MATCH = "#EDEBE7"       # 지표 매칭 없음
 INK = "#22201D"
 BG = "#F4F3F0"
+
+# 점 레이어 두 종 — 색으로 구분한다. 현행 차고지는 짙은 남색(운영 중),
+# 후보는 주황(아직 아님). 크기도 9 vs 7 로 갈라 겹쳐도 읽히게 한다.
+DEPOT_COLOR = "#2F4858"
+CAND_COLOR = "#C8722B"
+# 후보 점 클릭을 코로플레스 클릭과 구분하는 태그(customdata 첫 칸)
+CAND_TAG = "cand"
 PANEL_BG = "#FBFAF8"
 
 PERIOD_ORDER = ["심야", "아침", "낮", "저녁"]
@@ -139,6 +146,12 @@ def load_boundary():
 @st.cache_data(show_spinner=False)
 def load_depots() -> pd.DataFrame:
     return load.load_depots()
+
+
+@st.cache_data(show_spinner=False)
+def load_candidates() -> pd.DataFrame:
+    """거점 후보 — 옥외 348곳(A-15). 옥내·혼합은 진입 유효고를 확인할 수 없어 뺀다."""
+    return load.load_candidates()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -325,7 +338,7 @@ def metric_z(poly: pd.DataFrame, key: str):
 # ─────────────────────────────────────────────────────────────
 
 def build_map(poly: pd.DataFrame, selected, show_depots: bool,
-              metric_key: str) -> go.Figure:
+              show_cands: bool, metric_key: str) -> go.Figure:
     """지도 figure.
 
     geojson·locations 를 rerun 마다 동일하게 유지해 실제로 달라지는 것이
@@ -383,11 +396,32 @@ def build_map(poly: pd.DataFrame, selected, show_depots: bool,
             name="선택 동",
         ))
 
+    # 후보를 차고지보다 먼저 그린다 — 겹칠 때 현행 차고지가 위로 와야
+    # "이미 있는 곳"과 "놓을 수 있는 곳"이 구별된다.
+    if show_cands:
+        cand = load_candidates()
+        # customdata 첫 칸의 태그로 클릭 이벤트에서 후보 점을 구분한다.
+        # 코로플레스 점은 location 을 갖고 이 태그가 없다.
+        # 실가용은 시영에만 있다 — 없는 건 -1 로 넘겨 패널에서 행을 뺀다
+        # (None 을 섞으면 plotly customdata 가 문자열로 눌린다).
+        cdata = [[CAND_TAG, n, int(c), s, g, -1 if pd.isna(a) else int(a)]
+                 for n, c, s, g, a in zip(
+                     cand["name"], cand["capacity"], cand["source"], cand["gu"],
+                     cand["capacity_available"])]
+        fig.add_trace(go.Scattermap(
+            lat=cand["lat"], lon=cand["lon"], mode="markers",
+            marker=dict(size=7, color=CAND_COLOR),
+            customdata=cdata,
+            hovertemplate=("%{customdata[1]}<br>%{customdata[2]:,}면 · "
+                           "%{customdata[3]} · %{customdata[4]}<extra></extra>"),
+            name="후보 주차장",
+        ))
+
     if show_depots:
         dep = load_depots()
         fig.add_trace(go.Scattermap(
             lat=dep["lat"], lon=dep["lon"], mode="markers",
-            marker=dict(size=9, color="#2F4858"),
+            marker=dict(size=9, color=DEPOT_COLOR),
             hovertext=[f"{n} · {c}대" for n, c in zip(dep["name"], dep["capacity"])],
             hovertemplate="%{hovertext}<extra></extra>", name="차고지",
         ))
@@ -433,6 +467,32 @@ def rows_html(items: list) -> str:
 
 def note_html(text: str) -> str:
     return f'<div class="note">{text}</div>' if text else ""
+
+
+def cand_panel(cd: list) -> None:
+    """클릭한 후보 주차장.
+
+    cd 는 지도 customdata — [태그, 이름, 면수, 소스, 자치구, 실가용면수(없으면 -1)].
+
+    **면수가 시뮬 입력이고 실가용은 참고값이다.** 실측 잔여면은 시영 65곳에만
+    있어서 그것을 용량으로 쓰면 후보 간 비교에서 자가 섞인다. 시영일 때만
+    한 줄 더 붙여 "총 면수만 보면 안 된다"를 화면에서 알 수 있게 한다.
+    """
+    _, name, capacity, source, gu, available = cd
+    rows = [("면수", f"{int(capacity):,}면"), ("소스", source), ("자치구", gu)]
+    note = "옥외 후보입니다. 시뮬 입력 용량은 이 총 면수입니다."
+    if available >= 0:
+        rows.insert(1, ("실가용 면수 (참고)", f"{int(available):,}면"))
+        note = ("옥외 후보입니다. <b>시뮬 입력은 총 면수</b>이고, 실가용 면수는 "
+                "정보공개청구 <b>피크시간 잔여구획</b>의 일별 중앙값 — 그 날 가장 "
+                "붐빈 1시간에 실제로 비어 있던 면입니다. 시영 65곳에만 있어 "
+                "용량으로는 쓰지 않고, 시뮬 뒤 후보를 좁힐 때 참고합니다. "
+                "하루 중 최악값이라 야간 여력은 이보다 큽니다.")
+    st.markdown(
+        '<div class="panel">'
+        f'<div class="dong-name">{name}</div>'
+        + rows_html(rows) + note_html(note)
+        + '</div>', unsafe_allow_html=True)
 
 
 def dong_panel(row: pd.Series, df: pd.DataFrame) -> None:
@@ -696,9 +756,19 @@ def sidebar(poly: pd.DataFrame) -> None:
     sb.divider()
     sb.markdown('<div class="map-title">레이어</div>', unsafe_allow_html=True)
     sb.toggle("차고지 (현행 44개)", key="show_depots")
+    cand = load_candidates()
+    sb.toggle(f"후보 주차장 (옥외 {len(cand)}곳)", key="show_cands")
+    sb.markdown(
+        f'<div class="legend">'
+        f'<span class="swatch" style="background:{DEPOT_COLOR}"></span>현행 차고지<br>'
+        f'<span class="swatch" style="background:{CAND_COLOR}"></span>후보 주차장'
+        f'</div>', unsafe_allow_html=True)
     sb.markdown(note_html(
-        "후보 주차장 레이어는 아직 없습니다. 실내외 판정·노상 제외 등 "
-        "후보 필터가 적용되지 않아 확정 전입니다."), unsafe_allow_html=True)
+        f"후보 풀 {cand.attrs['n_pool']}곳 중 <b>옥외 {len(cand)}곳</b>만 씁니다. "
+        f"옥내·혼합 {cand.attrs['n_excluded_indoor_mixed']}곳은 주차장 진입 "
+        "유효고를 확인할 소스가 없어 리프트 특장차가 들어갈 수 있는지 "
+        "판정할 수 없습니다(가정 A-15). 목록은 보존돼 있어 전고를 확인하면 "
+        "그대로 되살릴 수 있습니다."), unsafe_allow_html=True)
 
     sb.divider()
     key = st.session_state.metric_key
@@ -772,6 +842,8 @@ def main() -> None:
     ss.setdefault("page", 1)
     ss.setdefault("selected", None)
     ss.setdefault("show_depots", True)
+    ss.setdefault("show_cands", True)
+    ss.setdefault("selected_cand", None)
     ss.setdefault("metric_key", DEFAULT_METRIC)
 
     df = load_metrics()
@@ -804,7 +876,8 @@ def main() -> None:
             f'<div class="map-sub">{spec["label"]}으로 색칠 · 동을 클릭하면 '
             f'세부지표가 열립니다</div>', unsafe_allow_html=True)
 
-        fig = build_map(poly, ss.selected, ss.show_depots, ss.metric_key)
+        fig = build_map(poly, ss.selected, ss.show_depots, ss.show_cands,
+                        ss.metric_key)
         ev = st.plotly_chart(fig, width="stretch", on_select="rerun",
                              selection_mode="points", key="map")
 
@@ -813,6 +886,13 @@ def main() -> None:
             sel = ev.get("selection") if isinstance(ev, dict) else getattr(ev, "selection", None)
             pts = (sel or {}).get("points", []) if sel else []
         for p in pts:
+            cd = p.get("customdata")
+            # 후보 점 — 동 선택과 섞이면 안 되므로 태그로 먼저 가른다
+            if isinstance(cd, (list, tuple)) and cd and cd[0] == CAND_TAG:
+                if list(cd) != ss.selected_cand:
+                    ss.selected_cand = list(cd)
+                    st.rerun()
+                continue
             loc = p.get("location")
             if loc and loc != ss.selected:
                 ss.selected = loc
@@ -820,6 +900,12 @@ def main() -> None:
                 st.rerun()
 
     with right:
+        if ss.selected_cand is not None:
+            cand_panel(ss.selected_cand)
+            if st.button("후보 정보 닫기"):
+                ss.selected_cand = None
+                st.rerun()
+
         if ss.selected is None:
             st.markdown(
                 '<div class="panel">' + note_html(

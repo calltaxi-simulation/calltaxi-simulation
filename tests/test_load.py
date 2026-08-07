@@ -6,6 +6,7 @@ test_load.py — 데이터 로딩 검증 (코드 점검)
 """
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 import load
@@ -119,14 +120,68 @@ def test_load_dong_centroids(data_dir):
     assert not cen.duplicated(subset=["gu", "dong_canon"]).any()
 
 
-def test_load_candidates(data_dir):
+def test_load_candidates_outdoor_only(data_dir):
+    """기본은 옥외만 — 옥내·혼합이 섞이면 A-15 가 깨진 것이다."""
     c = load.load_candidates()
-    assert len(c) > 0
+    assert len(c) == 348
+    assert c["capacity"].sum() == 24_392
+    assert (c["enclosure"] == "옥외").all()
+    assert c["is_outdoor"].all()
     assert in_seoul(c["lat"], c["lon"])
     assert c["gu"].isin(load.SEOUL_GU).all()
     assert (c["capacity"] >= 0).all()
-    # 좌표 없는 건은 전부 구영이라는 사실이 유지되는지 (바뀌면 후보지 풀 해석이 달라진다)
-    assert c.attrs["n_dropped_no_coord"] == c.attrs["n_dropped_district_run"]
+    assert not c["cand_id"].duplicated().any()
+
+
+def test_load_candidates_keeps_full_pool(data_dir):
+    """옥내·혼합은 제외하되 목록은 보존한다 — 전고 확인 시 재편입할 후보다."""
+    full = load.load_candidates(outdoor_only=False)
+    assert len(full) == 639
+    assert full["enclosure"].value_counts().to_dict() == {"옥외": 348, "옥내": 163, "혼합": 128}
+    assert full.attrs["n_excluded_indoor_mixed"] == 291
+    # cand_id 는 원본 행 순서 — 옥외만 걸러도 같은 후보는 같은 번호를 가져야 한다
+    out = load.load_candidates()
+    merged = out.merge(full, on="cand_id", suffixes=("", "_full"))
+    assert len(merged) == len(out)
+    assert (merged["name"] == merged["name_full"]).all()
+
+
+def test_capacity_is_total_area_for_every_candidate(data_dir):
+    """시뮬 입력 용량은 전 후보 총 면수 하나로 통일 — 65곳만 잔여면이면 자가 섞인다."""
+    c = load.load_candidates(outdoor_only=False)
+    raw = pd.read_csv(load.DATA_DIR / "sim_pool_v4.csv", encoding="utf-8-sig")
+    assert c["capacity"].sum() == round(raw["면수"].sum()) == 55_798
+    # 실가용이 붙은 시영도 용량은 총 면수 그대로여야 한다
+    sy = c["capacity_available"].notna()
+    assert (c.loc[sy, "capacity"] > c.loc[sy, "capacity_available"]).sum() > 0
+    assert c.loc[sy, "capacity"].sum() == 6_950
+
+
+def test_peak_residual_is_reference_only(data_dir):
+    """실가용 면수는 참고 컬럼 — 시영에만 붙고, 붙이든 말든 capacity 는 안 바뀐다."""
+    c = load.load_candidates(outdoor_only=False)
+    assert c.attrs["n_capacity_available"] == 65
+    sy = c["capacity_available"].notna()
+    assert (c.loc[sy, "source"] == "시영").all()
+    assert sy.sum() == (c["source"] == "시영").sum() == 65
+    # 잔여면은 총 면수를 넘을 수 없다
+    assert (c.loc[sy, "capacity_available"] <= c.loc[sy, "capacity"]).all()
+    assert c.loc[sy, "capacity_available_ratio"].between(0, 1).all()
+    assert c.loc[~sy, "capacity_available_ratio"].isna().all()
+
+    off = load.load_candidates(outdoor_only=False, with_peak_residual=False)
+    assert off["capacity_available"].isna().all()
+    assert (off["capacity"] == c["capacity"]).all(), "참고값 유무가 용량을 바꾸면 안 된다"
+
+
+def test_load_peak_residual(data_dir):
+    """피크시간 잔여 시트 — 365일 × 111곳."""
+    r = load.load_peak_residual()
+    assert len(r) == 111
+    assert (r["n_days"] == 365).all()
+    assert (r["capacity_available"] >= 0).all()
+    assert (r["capacity_available"] <= r["avail_max"]).all()
+    assert not r["name"].duplicated().any()
 
 
 def test_load_undersupplied(data_dir):

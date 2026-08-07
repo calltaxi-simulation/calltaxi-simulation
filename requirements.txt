@@ -21,5 +21,6 @@ streamlit>=1.35        # 대시보드(plotly on_select 는 1.35+)
 plotly>=5.24           # 대시보드 지도(Choroplethmap·uirevision·transition)
 matplotlib>=3.7        # 시각화
 pyarrow>=14.0          # parquet 캐시(대용량 콜 데이터)
+openpyxl>=3.1          # 정보공개청구 xlsx(시영 피크시간 잔여구획)
 pytest>=7.4            # 코드 점검 테스트
 jupyter                # 탐색·검증용

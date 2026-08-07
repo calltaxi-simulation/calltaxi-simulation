@@ -75,7 +75,11 @@ $env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
 | 서울시_장애인_통계_2025.csv | 동별 등록 장애인(이용률 분모) |
 | HangJeongDong_ver20230701.geojson | 동 경계 |
 | 동별_거점용량_접근성.csv | 과소공급 동(3km내 10대 이하) |
-| 공영주차장_목록.csv / 시영주차장_목록.csv | 후보지 원본 |
+| sim_pool_v4.csv | **거점 후보 풀 639곳 · 55,798면** — 만들어진 과정은 [docs/sim-pool.pipeline.v4.md](docs/sim-pool.pipeline.v4.md). 시뮬은 이 중 옥외 348곳만 쓴다(가정 A-15) |
+| 주차장_평균이용률_정보공개청구(17078071) 공개내용.xlsx | 시영 65곳 실가용 면수(피크시간 잔여구획). `data/` 아래 어느 폴더에 두어도 파일명으로 찾는다 |
+
+`공영주차장_목록.csv` / `시영주차장_목록.csv` 는 더 이상 코드가 읽지 않는다 —
+후보 풀 파이프라인의 입력으로 흡수됐고 저장소는 그 산출물(`sim_pool_v4.csv`)만 본다.
 
 ## 실행
 
@@ -88,6 +92,9 @@ python src/travel_time.py
 
 # 동별 진단 지표 산출 (outputs/ 에 저장 → 전체값을 검증 기준과 대조)
 python src/metrics.py
+
+# 동별 거점 후보 배정 (내부 → 1km 대체 → 경계선상 → 보류)
+python src/candidates.py
 
 # 유휴 구간 산출 (하차 → 다음 배차)
 python src/idle.py
@@ -121,15 +128,17 @@ simulation/
 │  ├ metrics.py      # 동별 진단 지표(대기·차내·미이행·수요·공급·형평)
 │  ├ idle.py         # 유휴 구간(하차 → 다음 배차)
 │  ├ patience.py     # 인내심 분포(Kaplan-Meier)
+│  ├ candidates.py   # 동별 거점 후보 배정(후보 풀 → 행정동 426개)
 │  ├ simulator.py    # 시뮬 엔진(SimPy) — 구현 예정
 │  └ dashboard.py    # Streamlit 진단 대시보드
 ├ docs/
-│  ├ assa_log.md         # 가정 대장(A-01~A-14) — 가정 부호의 정본
+│  ├ assa_log.md         # 가정 대장(A-01~A-15) — 가정 부호의 정본
 │  ├ calibration.md      # 정본 — 모듈별 필터·지표 정의·타깃 근거·한계
 │  ├ provenance.md       # 산출값 대장(스크립트를 돌려 얻은 현재 값)
 │  ├ model_flow.md       # 시뮬 설계 — 흐름도·조 편성·엔진·난수
 │  ├ dashboard_spec.md   # 대시보드 화면 결정과 근거
-│  └ external_sources.md # 코드 밖 근거 — 문헌·구술·소급 기록·저장소 밖 자료
+│  ├ external_sources.md # 코드 밖 근거 — 문헌·구술·소급 기록·저장소 밖 자료
+│  └ sim-pool.pipeline.v4.md  # 후보 풀 639곳이 만들어진 과정(원본 명세 사본)
 ├ tests/            # pytest
 ├ cache/            # 콜 원본 parquet 캐시(자동 생성, git 제외)
 └ outputs/          # 결과
@@ -138,7 +147,8 @@ simulation/
    ├ idle_gaps.csv               # 유휴 구간 요약 — src/idle.py 산출
    ├ idle_by_hour.csv            # 시간대별 평균 동시 유휴 차량 수
    ├ patience_km.csv             # 인내심 생존곡선(0.5분 격자) — src/patience.py 산출
-   └ patience_summary.csv        # 인내심 추정 요약 1행
+   ├ patience_summary.csv        # 인내심 추정 요약 1행
+   └ dong_candidates.csv         # 동 426개 × 배정된 후보 — src/candidates.py 산출
 ```
 
 지표 함수는 파일을 읽지 않고 데이터프레임만 받는다. 실측 콜(진단)과 시뮬 로그(예측)에

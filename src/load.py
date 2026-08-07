@@ -363,50 +363,174 @@ def load_dong(path: Path = None, *, with_boundary: bool = False, crs: int = 4326
     return gdf[["adm_nm", "adm_cd2", "gu", "dong_canon", "geometry"]]
 
 
-def load_candidates(path: Path = None, *, seoul_only: bool = True) -> pd.DataFrame:
-    """후보지(시영·공영 주차장) 로딩. 총면수·유형·좌표.
+_POOL_COLS = {
+    "주차장명": "name", "주소": "address", "자치구": "gu",
+    "법정동": "bdong", "법정동코드": "bdong_cd",
+    "면수": "capacity", "위도": "lat", "경도": "lon",
+    "소스": "source", "공공근거": "public_basis",
+    "UPIS대분류": "upis_lclas", "UPIS시설명": "upis_name", "고시번호": "notice_no",
+    "옥내외": "enclosure", "옥내자주": "indoor_self", "옥외자주": "outdoor_self",
+    "현행차고지": "current_depot", "현행차고지거리m": "current_depot_dist_m",
+    "운영시간": "open_hours", "급지": "price_grade", "이용효율": "usage_efficiency",
+}
 
-    공영주차장_목록.csv 가 좌표를 가진 마스터다(2189행, 시영여부 플래그 포함).
-    시영주차장_목록.csv 는 좌표 컬럼이 없고 122행 중 117행이 공영 파일에
-    PKLT_CD 로 들어 있어, 좌표 있는 공영 파일을 기준으로 삼는다.
+# 정보공개청구 17078071 — 파일명에 접수번호가 박혀 있어 이것으로 찾는다.
+# data/ 아래 어느 깊이에 두어도 걸리게 재귀 탐색한다(압축 해제 폴더가 한 겹 더 있다).
+FOIA_PARKING_GLOB = "**/*17078071*.xlsx"
+PEAK_RESIDUAL_SHEET = "2025 피크시간 잔여"
 
-    ⚠ 주의: 좌표가 0,0 인 733건은 전부 자치구영(시영여부=N, 이름 접미 '(구)')이다.
-    즉 좌표 필터를 걸면 후보지 풀이 시영 1456곳만 남는다. 구영을 후보에
-    포함하려면 step1_geocode.py(저장소 밖 탐색 스크립트, docs/external_sources.md
-    5절)로 주소 지오코딩을 먼저 돌려야 한다.
-    제외 내역은 attrs['n_dropped_no_coord'] / attrs['n_dropped_district_run'] 참조.
 
-    반환 컬럼: cand_id, name, address, gu, lot_type, oper_type, capacity,
-              is_paid, is_city_run, night_open, lat, lon
+def find_foia_parking_xlsx(data_dir: Path = None) -> Path | None:
+    """정보공개청구(17078071) 원본 xlsx 경로. 없으면 None."""
+    root = Path(data_dir) if data_dir else DATA_DIR
+    # '~$...' 는 엑셀이 열어둘 때 만드는 잠금 파일이라 걸리면 안 된다
+    hits = sorted(p for p in root.glob(FOIA_PARKING_GLOB)
+                  if not p.name.startswith("~$"))
+    return hits[0] if hits else None
+
+
+def load_peak_residual(path: Path = None) -> pd.DataFrame:
+    """시영주차장 피크시간 잔여구획 → 주차장별 실가용 면수.
+
+    정보공개청구 17078071 의 `2025 피크시간 잔여` 시트(40,515행 = 111곳 × 365일).
+    한 행이 "그 날 가장 붐빈 1시간에 몇 면이 비어 있었나"다.
+
+    **총 면수가 아니라 이 값이 거점 평가의 분모다.** 362면짜리 복정역도 피크에
+    남는 면은 중앙 23면이고, 방화역(동) 67면은 365일 내내 0면이다. 총 면수로
+    후보를 고르면 상시 만차인 주차장을 대형 후보로 착각한다.
+
+    대표값은 **일별 피크잔여의 중앙값**을 쓴다. 평균은 명절·연휴의 큰 값에
+    끌려간다 — 개화산역은 중앙 21면인데 평균 47.7면(최대 212)이다.
+
+    ⚠ 한계 두 가지.
+      - 피크시간은 그 날 가장 붐빈 때라 **하루 중 최악값**이다. 차고지는 박차
+        (17시~익일 07시, A-09)가 주 용도라 야간 여력은 이 값보다 크다.
+        보수적 하한으로 읽어야 한다.
+      - 명칭 조인이라 이름이 바뀌면 조용히 빠진다. 조인 결과는 호출부에서
+        건수로 확인한다.
+
+    반환 컬럼: name, capacity_available, avail_mean, avail_p25, avail_max, n_days
     """
-    path = Path(path) if path else DATA_DIR / "공영주차장_목록.csv"
+    path = Path(path) if path else find_foia_parking_xlsx()
+    if path is None:
+        raise FileNotFoundError(
+            f"정보공개청구 17078071 xlsx 를 {DATA_DIR} 아래에서 찾지 못했다")
+
+    df = pd.read_excel(path, sheet_name=PEAK_RESIDUAL_SHEET)
+    df["name"] = df["주차장명"].astype(str).str.strip()
+
+    g = df.groupby("name")["잔여구획"]
+    out = pd.DataFrame({
+        "capacity_available": g.median(),
+        "avail_mean": g.mean(),
+        "avail_p25": g.quantile(0.25),
+        "avail_max": g.max(),
+        "n_days": g.size(),
+    }).reset_index()
+    out.attrs["source_path"] = str(path)
+    return out
+
+
+def load_candidates(path: Path = None, *, outdoor_only: bool = True,
+                    with_peak_residual: bool = True) -> pd.DataFrame:
+    """시뮬 거점 후보 풀 로딩 — `sim_pool_v4.csv` (639곳 · 55,798면).
+
+    공영·시영 원본 목록을 직접 읽던 방식을 대체한다. v4 풀은 공영·시영에 더해
+    KOTSA 주차장을 UPIS 도시계획시설 폴리곤과 공간조인해 공공성을 판정하고,
+    건축물대장으로 민간·기계식을 걸러낸 결과다. 만들어진 과정은
+    docs/sim-pool.pipeline.v4.md 참조.
+
+    **기본은 옥외 348곳 24,392면만 돌려준다(A-15).** 리프트 특장차(전고 2.6m)가
+    들어갈 수 있어야 거점이 되는데, 주차장 진입 유효고를 주는 소스가 없어
+    옥내 163곳·혼합 128곳은 진입 가능 여부를 판정할 수 없다(파이프라인 8-1,
+    미해결 #2). 기계식은 풀 단계에서 이미 빠졌지만 자주식 옥내라도 유효고가
+    낮으면 리프트 차량은 못 들어간다. 혼합도 뺀다 — 파이프라인이 혼합 111곳은
+    사실상 옥내이고 "옥외분만 골라 쓴다"는 계산은 신뢰할 수 없다고 못박았다.
+
+    **제외분은 버리지 않는다.** `outdoor_only=False` 로 부르면 639곳 전체가
+    나온다. 현장에서 유효고를 확인하면 그대로 재편입할 후보다.
+
+    **시뮬 입력 용량은 `capacity` = 총 면수 하나로 통일한다.** 실측 잔여면은
+    시영 65곳에만 있어서, 그것을 용량으로 쓰면 65곳은 잔여면 · 283곳은 총 면수가
+    되어 **후보 간 비교에서 자가 섞인다.** 배치 효과의 후보별 차이가 위치가 아니라
+    측정 기준의 차이에서 나오게 된다.
+
+    실가용 면수는 버리지 않고 **후보 품질 참고값**으로 남긴다.
+      `capacity_available`        시영 65곳 — 피크시간 잔여구획의 일별 중앙값
+      `capacity_available_ratio`  실가용 / 총 면수
+    시영 총 6,950면의 실가용은 1,097면(15.8%)이다. 시뮬 결과가 나온 뒤 후보를
+    좁힐 때 쓴다 — 190면짜리라도 피크에 상시 만차면 거점으로 쓸 수 없다.
+    나머지 283곳에는 잔여 실측 자체가 없어 NaN 이다(0 이 아니다).
+
+    cand_id 는 원본 CSV 의 행 순서(1부터)다. 풀을 다시 만들면 번호가 바뀐다 —
+    저장 키가 아니라 실행 안에서의 참조용이다.
+
+    반환 컬럼: cand_id, name, address, gu, bdong, bdong_cd, lat, lon,
+              capacity(시뮬 입력), capacity_available, capacity_available_ratio,
+              source, public_basis, upis_lclas, upis_name, notice_no,
+              enclosure, is_outdoor, indoor_self, outdoor_self,
+              current_depot, current_depot_dist_m,
+              open_hours, price_grade, usage_efficiency
+    """
+    path = Path(path) if path else DATA_DIR / "sim_pool_v4.csv"
     df = pd.read_csv(path, encoding="utf-8-sig")
 
-    out = df.rename(columns={
-        "PKLT_CD": "cand_id", "PKLT_NM": "name", "ADDR": "address",
-        "PKLT_KND_NM": "lot_type", "OPER_SE_NM": "oper_type", "TPKCT": "capacity",
-        "LAT": "lat", "LOT": "lon",
-    })[["cand_id", "name", "address", "lot_type", "oper_type", "capacity", "lat", "lon"]]
+    missing = set(_POOL_COLS) - set(df.columns)
+    if missing:
+        raise ValueError(f"{path.name} 에 없는 컬럼: {sorted(missing)}")
 
-    out["is_paid"] = df["CHGD_FREE_NM"].eq("유료")
-    out["is_city_run"] = df["시영여부"].eq("Y")          # Y=시영, N=구영
-    out["night_open"] = df["NGHT_FREE_OPN_YN"].eq("Y")
-    out["gu"] = out["address"].str.split(" ").str[0]
-    out["capacity"] = out["capacity"].fillna(0).astype(int)
+    out = df.rename(columns=_POOL_COLS)[list(_POOL_COLS.values())].copy()
+    out.insert(0, "cand_id", np.arange(1, len(out) + 1, dtype=np.int32))
+    out["capacity"] = out["capacity"].round().astype(int)
+    out["is_outdoor"] = out["enclosure"].eq("옥외")
 
-    no_coord = ~((out["lat"] > 0) & (out["lon"] > 0))
-    n_no_coord = int(no_coord.sum())
-    n_district = int((no_coord & ~out["is_city_run"]).sum())
+    n_all = len(out)
+    n_by_enclosure = out["enclosure"].value_counts().to_dict()
+    cap_by_enclosure = out.groupby("enclosure")["capacity"].sum().to_dict()
 
-    out = out[~no_coord]
-    if seoul_only:
-        out = out[out["gu"].isin(SEOUL_GU)]
+    if not out["gu"].isin(SEOUL_GU).all():
+        bad = sorted(set(out["gu"]) - set(SEOUL_GU))
+        raise ValueError(f"서울 25구가 아닌 자치구가 섞여 있다: {bad}")
+
+    # 실가용 면수 — 참고 컬럼이다. 시뮬 입력 capacity 에는 손대지 않는다.
+    out["capacity_available"] = np.nan
+    n_available = 0
+    avail_note = "미부착"
+    if with_peak_residual:
+        try:
+            avail = load_peak_residual()
+        except (FileNotFoundError, ImportError, ValueError) as e:
+            avail_note = f"미부착 ({type(e).__name__}: {e})"
+        else:
+            m = out["name"].str.strip().map(
+                avail.set_index("name")["capacity_available"])
+            # 잔여 실측은 시영 소스에만 있다. 이름이 같은 공영·KOTSA 건에
+            # 잘못 붙지 않도록 소스로 한 번 더 막는다.
+            m = m.where(out["source"].eq("시영"))
+            out["capacity_available"] = m
+            n_available = int(m.notna().sum())
+            avail_note = f"시영 {n_available}곳"
+
+    out["capacity_available_ratio"] = out["capacity_available"] / out["capacity"]
+
+    if outdoor_only:
+        out = out[out["is_outdoor"]]
     out = out.reset_index(drop=True)
-    out.attrs["n_dropped_no_coord"] = n_no_coord
-    out.attrs["n_dropped_district_run"] = n_district
 
-    cols = ["cand_id", "name", "address", "gu", "lot_type", "oper_type",
-            "capacity", "is_paid", "is_city_run", "night_open", "lat", "lon"]
+    out.attrs["n_pool"] = n_all
+    out.attrs["n_by_enclosure"] = n_by_enclosure
+    out.attrs["capacity_by_enclosure"] = cap_by_enclosure
+    out.attrs["n_excluded_indoor_mixed"] = (n_by_enclosure.get("옥내", 0)
+                                            + n_by_enclosure.get("혼합", 0))
+    out.attrs["n_capacity_available"] = n_available
+    out.attrs["capacity_available_note"] = avail_note
+
+    cols = ["cand_id", "name", "address", "gu", "bdong", "bdong_cd", "lat", "lon",
+            "capacity", "capacity_available", "capacity_available_ratio",
+            "source", "public_basis", "upis_lclas", "upis_name", "notice_no",
+            "enclosure", "is_outdoor", "indoor_self", "outdoor_self",
+            "current_depot", "current_depot_dist_m",
+            "open_hours", "price_grade", "usage_efficiency"]
     return out[cols]
 
 
@@ -550,9 +674,16 @@ if __name__ == "__main__":
     print(f"차고지         {len(depots):>10,}개  차량 {depots['capacity'].sum()}대")
 
     cands = load_candidates()
-    print(f"후보지         {len(cands):>10,}개  (시영 {cands['is_city_run'].sum()})")
-    print(f"  ⚠ 좌표없어 제외 {cands.attrs['n_dropped_no_coord']}건 "
-          f"— 전부 구영({cands.attrs['n_dropped_district_run']}건). 지오코딩 필요.")
+    enc, cap = cands.attrs["n_by_enclosure"], cands.attrs["capacity_by_enclosure"]
+    print(f"후보 풀        {cands.attrs['n_pool']:>10,}곳  "
+          + " / ".join(f"{k} {enc[k]}곳 {cap[k]:,.0f}면" for k in ("옥외", "옥내", "혼합")))
+    print(f"후보(옥외만)   {len(cands):>10,}곳  {cands['capacity'].sum():,}면"
+          f"  — 옥내·혼합 {cands.attrs['n_excluded_indoor_mixed']}곳 제외(A-15)")
+    sy = cands["capacity_available"].notna()
+    print(f"  실가용 면수  {cands.attrs['capacity_available_note']}"
+          f"  · 시영 옥외 {int(cands.loc[sy, 'capacity'].sum()):,}면 →"
+          f" {int(cands.loc[sy, 'capacity_available'].sum()):,}면"
+          f"  (시뮬 입력은 총 면수)")
 
     under = load_undersupplied()
     print(f"과소공급 동    {len(under):>10,}개")

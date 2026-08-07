@@ -1,0 +1,361 @@
+"""
+candidates.py — 동별 거점 후보 배정
+
+시뮬은 동 단위로 돌아간다. "이 동에 거점을 놓으면 대기가 얼마나 줄어드나"를
+재려면 동마다 놓을 자리가 하나 정해져 있어야 한다. 후보 풀(load.load_candidates,
+옥외 348곳)을 426개 행정동에 배정하는 규칙이 여기 있다.
+
+규칙은 3단이다.
+
+    ⑴ 내부        동 경계 안에 옥외 후보가 있으면 → 총 면수 최대 1곳
+    ⑵ 1km대체     없으면 → 중심점에서 1km 이내 최근접 옥외 후보
+    ⑶ 1km 밖      성격별로 갈린다
+         경계선상 (1.0~1.2km)      → 1.2km 까지 허용해 편입
+         공항·개발제한             → 후보 없음, 시뮬 대상에서 제외
+         보류(대표점 재검토)       → 후보 없음, 이번 회차 보류
+
+⑴에서 동 안의 여러 곳을 하나로 접는 이유는 시뮬이 동을 한 점으로 다루기
+때문이다. 같은 동의 후보 두 곳은 배차 거리에서 구별되지 않는다.
+
+**⑵의 반경을 1km 로 잡은 근거.** 파이프라인 6절 측정에서 옥외 후보 기준
+중심점 1km 커버리지가 83.7%, 1.5km 가 97.0%다. 1.5km 로 늘리면 커버는
+13.3%p 늘지만 대체 거리가 50% 길어지고 그만큼이 그대로 배차 이동시간에
+붙는다. 얻는 커버리지보다 왜곡이 크다고 보아 1km 에서 끊었다.
+
+**⑶ 경계선상을 따로 두는 이유.** 1km 를 근소하게 넘긴 동이 몰려 있다 —
+연남동 1,002m · 북가좌1동 1,003m · 암사1동 1,003m 처럼 몇 미터 차이다.
+여기서 자르면 임계값이 결과를 만든다. 1.2km 까지는 같은 성격으로 본다.
+
+**⑶ 보류 버킷의 성격.** 1.2km 밖 동들은 후보가 없어서가 아니라 **동 중심점이
+그 동의 대표점으로 부적절**해서 멀게 나온 경우가 대부분이다 — 관악구 대학동
+2,292m 는 중심점이 관악산 안에 있고, 도봉1동 1,725m 는 도봉산, 정릉1~4동은
+북한산이다. 대표점을 콜 발생 가중 중심으로 다시 잡으면 상당수가 해소된다.
+그 재계산은 **콜 데이터 정제(특장차 한정) 이후로 미룬다** — 지금 임의 기준으로
+대표점을 옮기면 콜 정제 결과와 어긋난다.
+
+**상한은 코드에서 끊는다.** 대체 배정(⑵⑶)에 1.2km 초과가 남으면
+`assign_dong_candidates` 가 `AssertionError` 로 멈춘다. 표시만 하고 넘기면
+시뮬이 엉뚱한 자리를 거점으로 쓴다. ⑴ 내부에는 상한을 걸지 않는다 — 후보가
+그 동 **안에** 있어서 '엉뚱한 자리'가 아니고, 자르면 실재하는 후보를 두고
+미배정이 된다. 대신 중심점에서 1.2km 넘게 떨어진 내부 배정은
+`cand_beyond_cap` 으로 표시한다(10곳 — 진관동 1,900m · 공항동 1,892m ·
+양재2동 2,562m 등, 전부 같은 대표점 문제다).
+
+**미배정 동은 후보 없음으로 확정한다.** 다만 "수요가 없어서"가 아니다 — 미배정
+48동 중 **46동이 콜 100건 이상**이고 연희동 15,572건 · 구의2동 11,682건처럼
+큰 동이 섞여 있으며, A-15 가 지목한 대기 최악 구간(남현동 62.8분 · 인헌동
+58.4분 · 대학동 54.5분)이 여기 몰려 있다. **이 동들은 진단에서 빠지는 게 아니라
+대표점 재계산을 기다리는 것**이다. 재계산 대상은 아래 상수에 적어 둔다.
+
+동 경계는 행정동(426개)이다. 후보 풀의 `법정동` 컬럼을 쓰지 않고 좌표로
+공간조인하는 이유는 시뮬·지표가 전부 행정동 격자를 쓰기 때문이다. 파이프라인
+6절의 커버리지 수치는 법정동 467개 기준이라 여기 숫자와 직접 비교되지 않는다.
+"""
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+import load
+
+# 대체 반경. 근거는 모듈 docstring.
+NEAR_RADIUS_M = 1000.0
+EDGE_RADIUS_M = 1200.0
+
+# 공항·개발제한으로 구조적 공백인 동. 후보를 못 찾는 게 아니라 놓을 땅이 없다.
+# 파이프라인 6절은 법정동 기준으로 오곡·오쇠·과해·항동을 든다. 이 모듈은
+# 행정동 격자라 아래로 옮긴다 — 오곡·오쇠·과해는 행정동 '공항동'에 속하고,
+# 항동은 그 자체가 행정동이다(2019년 항동지구 개발로 오류2동에서 분리).
+AIRPORT_GREENBELT = {
+    ("강서구", "공항동"),
+    ("구로구", "항동"),
+}
+
+# 콜 발생 가중 중심으로 대표점을 다시 잡을 대상. 특장차 한정 콜 정제 뒤 재산출한다.
+# 지정은 법정동 이름으로 받았고(산지 6곳), 이 모듈의 행정동 격자에서는 아래로 펴진다.
+# 평창은 행정동 평창동이 이미 내부 배정(비봉(구) 1,137m)이라 재계산 대상에서만
+# 이름이 남고, 구기는 행정동이 아니라 법정동이다(행정동 평창동에 속한다).
+CENTROID_RECALC_BDONG = ("도봉동", "정릉동", "평창동", "공릉동", "구기동", "홍은동")
+CENTROID_RECALC_DONG = {
+    ("도봉구", "도봉1동"), ("노원구", "공릉2동"), ("서대문구", "홍은2동"),
+    ("성북구", "정릉1동"), ("성북구", "정릉2동"),
+    ("성북구", "정릉3동"), ("성북구", "정릉4동"),
+}
+
+RULE_INSIDE = "내부"
+RULE_NEAR = "1km대체"
+RULE_EDGE = "경계선상"
+RULE_AIRPORT = "공항·개발제한"
+RULE_PENDING = "보류_대표점"
+
+# 배정된 동(시뮬이 돌릴 수 있는 동)
+ASSIGNED_RULES = (RULE_INSIDE, RULE_NEAR, RULE_EDGE)
+
+EARTH_R_M = 6371008.8
+
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    """두 좌표 사이 대권거리(m). numpy 브로드캐스팅으로 행렬도 받는다.
+
+    서울 규모(30km)에서 평면 근사와 1m 이내로 갈리지 않으므로 투영 없이 쓴다.
+    """
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dp = p2 - p1
+    dl = np.radians(np.asarray(lon2) - np.asarray(lon1))
+    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return 2 * EARTH_R_M * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+def load_dong_frame() -> pd.DataFrame:
+    """배정 대상 동 426개. 중심점 + 경계코드 + 면적.
+
+    면적은 보류 버킷을 읽을 때 필요하다 — "중심점이 대표점으로 부적절"의
+    근거가 동이 넓다는 사실이라, 숫자 없이 주장하면 확인할 수가 없다.
+    면적은 EPSG:5179(미터)로 투영해 계산한다.
+
+    반환 컬럼: gu, dong_canon, adm_nm, adm_cd2, dong_lat, dong_lon, area_km2
+    """
+    cen = load.load_dong()                        # 426행, 중심점
+    gdf = load.load_dong(with_boundary=True)      # 426 폴리곤, EPSG:4326
+
+    area = gdf.to_crs(5179)
+    gdf = gdf.assign(area_km2=area.geometry.area.to_numpy() / 1e6)
+
+    out = cen.merge(gdf[["gu", "dong_canon", "adm_cd2", "area_km2"]],
+                    on=["gu", "dong_canon"], how="left", validate="one_to_one")
+    if out["adm_cd2"].isna().any():
+        bad = out.loc[out["adm_cd2"].isna(), ["gu", "dong_canon"]]
+        raise ValueError(f"경계와 매칭되지 않는 동: {bad.to_dict('records')}")
+
+    return out.rename(columns={"lat": "dong_lat", "lon": "dong_lon"})[
+        ["gu", "dong_canon", "adm_nm", "adm_cd2", "dong_lat", "dong_lon", "area_km2"]]
+
+
+def locate_candidates(cands: pd.DataFrame) -> pd.DataFrame:
+    """후보 좌표를 행정동 경계에 공간조인해 `adm_cd2` 를 붙인다.
+
+    주소 문자열에서 동을 뽑지 않는 이유는 파이프라인 3-10과 같다 —
+    '성수동1가'·'당산동3가' 같은 표기가 별개 동으로 잡힌다.
+
+    경계 밖으로 떨어지는 후보는 `adm_cd2` 가 NaN 으로 남는다(전부 배정되면 0곳).
+    """
+    import geopandas as gpd   # 경계가 필요할 때만 — load.load_dong 과 같은 이유
+
+    gdf = load.load_dong(with_boundary=True)
+    pts = gpd.GeoDataFrame(
+        cands, geometry=gpd.points_from_xy(cands["lon"], cands["lat"]), crs=4326)
+    joined = gpd.sjoin(pts, gdf[["adm_cd2", "geometry"]], how="left", predicate="within")
+    # 경계가 겹치면 한 점이 두 폴리곤에 잡힐 수 있다. 첫 건만 남긴다.
+    joined = joined[~joined.index.duplicated(keep="first")]
+    return pd.DataFrame(joined.drop(columns=["geometry", "index_right"]))
+
+
+def assign_dong_candidates(cands: pd.DataFrame = None, *,
+                           near_m: float = NEAR_RADIUS_M,
+                           edge_m: float = EDGE_RADIUS_M) -> pd.DataFrame:
+    """동 426개에 후보를 배정한다. 규칙은 모듈 docstring 참조.
+
+    cands 를 주지 않으면 `load.load_candidates()`(옥외 348곳)를 쓴다.
+    옥내·혼합을 넣어 돌리고 싶으면 그 풀을 직접 만들어 넘기면 된다.
+
+    `nearest_dist_m` 는 배정 여부와 무관하게 항상 채운다 — 보류·제외 동이
+    얼마나 멀어서 빠졌는지가 그 판정의 근거라, 비워두면 확인할 수가 없다.
+    `dist_m`(배정된 후보까지 거리)은 배정된 동에만 있다.
+
+    `capacity` 는 시뮬 입력용 총 면수다. `capacity_available`(시영 실측 잔여면)은
+    후보 품질 참고값으로 따라올 뿐 배정 순위에 쓰지 않는다 — 65곳만 잔여면
+    기준이면 후보 간 비교에서 자가 섞인다.
+
+    반환 컬럼:
+      gu, dong_canon, adm_nm, adm_cd2, dong_lat, dong_lon, area_km2,
+      assign_rule, is_assigned, n_outdoor_in_dong, nearest_dist_m,
+      cand_id, cand_name, capacity, capacity_available,
+      source, cand_lat, cand_lon, dist_m, cand_beyond_cap
+    """
+    if cands is None:
+        cands = load.load_candidates()
+    if not len(cands):
+        raise ValueError("후보 풀이 비어 있다")
+
+    dong = load_dong_frame()
+    located = locate_candidates(cands)
+
+    inside = located[located["adm_cd2"].notna()].copy()
+    n_outside_boundary = int(located["adm_cd2"].isna().sum())
+
+    # 동 중심점 × 후보 전체 거리행렬 (426 × 348). 이 크기면 통째로 잡는 게
+    # 동마다 도는 것보다 빠르고, ⑵⑶ 판정과 nearest_dist_m 이 같은 값을 쓴다.
+    dist = haversine_m(dong["dong_lat"].to_numpy()[:, None],
+                       dong["dong_lon"].to_numpy()[:, None],
+                       cands["lat"].to_numpy()[None, :],
+                       cands["lon"].to_numpy()[None, :])
+    j_near = dist.argmin(axis=1)
+    dong = dong.assign(nearest_dist_m=dist[np.arange(len(dong)), j_near])
+
+    # ⑴ 동 내부 — 총 면수(capacity) 최대 1곳.
+    # 동점이면 중심점에 가까운 쪽, 그래도 같으면 cand_id 로 결정해 실행마다
+    # 결과가 흔들리지 않게 한다.
+    cen = dong.set_index("adm_cd2")[["dong_lat", "dong_lon"]]
+    inside["dist_m"] = haversine_m(
+        inside["adm_cd2"].map(cen["dong_lat"]).to_numpy(),
+        inside["adm_cd2"].map(cen["dong_lon"]).to_numpy(),
+        inside["lat"].to_numpy(), inside["lon"].to_numpy())
+
+    n_in_dong = inside.groupby("adm_cd2").size().rename("n_outdoor_in_dong")
+    best = (inside.sort_values(["capacity", "dist_m", "cand_id"],
+                               ascending=[False, True, True])
+                  .groupby("adm_cd2", as_index=False).head(1)
+                  .set_index("adm_cd2"))
+
+    # ⑵⑶ 나머지 동 — 중심점에서 가장 가까운 후보(동 안팎을 가리지 않는다)
+    is_rest = ~dong["adm_cd2"].isin(best.index)
+    nearest = cands.iloc[j_near[is_rest.to_numpy()]].copy()
+    nearest.index = dong.loc[is_rest, "adm_cd2"].to_numpy()
+    nearest["dist_m"] = dong.loc[is_rest, "nearest_dist_m"].to_numpy()
+
+    keep = ["cand_id", "name", "capacity", "capacity_available",
+            "source", "lat", "lon", "dist_m"]
+    picked = pd.concat([best[keep], nearest[keep]])
+
+    out = dong.merge(
+        picked.rename(columns={"name": "cand_name",
+                               "lat": "cand_lat", "lon": "cand_lon"}),
+        left_on="adm_cd2", right_index=True, how="left", validate="one_to_one")
+    out = out.merge(n_in_dong, left_on="adm_cd2", right_index=True, how="left")
+    out["n_outdoor_in_dong"] = out["n_outdoor_in_dong"].fillna(0).astype(int)
+
+    # 규칙 라벨. 거리 판정을 먼저 하고 성격은 그 뒤에 본다 — 1.2km 안에
+    # 실제 후보가 있으면 공항동이든 산지든 그 후보를 쓰는 게 맞다.
+    is_inside = out["adm_cd2"].isin(best.index)
+    key = list(zip(out["gu"], out["dong_canon"]))
+    rule = np.where(
+        is_inside, RULE_INSIDE,
+        np.where(out["nearest_dist_m"] <= near_m, RULE_NEAR,
+                 np.where(out["nearest_dist_m"] <= edge_m, RULE_EDGE,
+                          np.where([k in AIRPORT_GREENBELT for k in key],
+                                   RULE_AIRPORT, RULE_PENDING))))
+    out["assign_rule"] = rule
+    out["is_assigned"] = out["assign_rule"].isin(ASSIGNED_RULES)
+
+    # 배정 안 된 동은 후보 칸을 비운다. 값이 남아 있으면 "가장 가까운 후보"가
+    # "배정된 후보"로 잘못 읽힌다.
+    blank = ["cand_id", "cand_name", "capacity", "capacity_available",
+             "source", "cand_lat", "cand_lon", "dist_m"]
+    out.loc[~out["is_assigned"], blank] = np.nan
+    out["cand_id"] = out["cand_id"].astype("Int64")
+
+    # 대체 배정에 상한 초과가 남아 있으면 시뮬이 엉뚱한 자리를 거점으로 쓴다.
+    # 컬럼으로 표시만 하는 게 아니라 여기서 끊는다 — 위 라벨링이 어긋나면 터진다.
+    substitute = out["is_assigned"] & out["assign_rule"].ne(RULE_INSIDE)
+    over = out.loc[substitute & (out["dist_m"] > edge_m)]
+    if len(over):
+        raise AssertionError(
+            f"대체 배정 상한({edge_m:.0f}m) 초과가 남았다: "
+            f"{over[['gu', 'dong_canon', 'dist_m']].to_dict('records')}")
+
+    # ⑴ 내부는 상한을 걸지 않는다 — 후보가 그 동 **안에** 있어서 '엉뚱한 자리'가
+    # 아니고, 상한으로 자르면 실재하는 후보를 두고 미배정이 된다. 다만 중심점이
+    # 멀리 있다는 사실 자체는 대표점 문제라 표시해 둔다(대상 11곳).
+    out["cand_beyond_cap"] = out["is_assigned"] & (out["dist_m"] > edge_m)
+
+    out.attrs["n_candidates"] = len(cands)
+    out.attrs["n_outside_boundary"] = n_outside_boundary
+    out.attrs["near_m"], out.attrs["edge_m"] = near_m, edge_m
+
+    cols = ["gu", "dong_canon", "adm_nm", "adm_cd2", "dong_lat", "dong_lon",
+            "area_km2", "assign_rule", "is_assigned", "n_outdoor_in_dong",
+            "nearest_dist_m",
+            "cand_id", "cand_name", "capacity", "capacity_available",
+            "source", "cand_lat", "cand_lon", "dist_m", "cand_beyond_cap"]
+    return out[cols].sort_values(["gu", "dong_canon"]).reset_index(drop=True)
+
+
+def assignment_summary(assign: pd.DataFrame) -> pd.DataFrame:
+    """규칙별 동 수·중앙 대체거리·서로 다른 후보 수.
+
+    후보 수를 따로 세는 이유는 대체 배정이 겹치기 때문이다 — 여러 동이 같은
+    후보 한 곳을 가리킬 수 있고, 그 경우 실제 배치 지점은 동 수보다 적다.
+    """
+    order = [RULE_INSIDE, RULE_NEAR, RULE_EDGE, RULE_AIRPORT, RULE_PENDING]
+    rows = []
+    for rule in order:
+        g = assign[assign["assign_rule"] == rule]
+        d = g["dist_m"].dropna()
+        rows.append({
+            "assign_rule": rule,
+            "n_dong": len(g),
+            "n_cand": int(g["cand_id"].nunique()),
+            "dist_median_m": d.median() if len(d) else np.nan,
+            "dist_max_m": d.max() if len(d) else np.nan,
+            "capacity_sum": g["capacity"].sum(),
+        })
+    return pd.DataFrame(rows)
+
+
+OUTPUT_PATH = Path(__file__).resolve().parent.parent / "outputs" / "dong_candidates.csv"
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    cands = load.load_candidates()
+    enc = cands.attrs["n_by_enclosure"]
+    print(f"후보 풀 {cands.attrs['n_pool']}곳 → 옥외 {len(cands)}곳 "
+          f"{cands['capacity'].sum():,}면 "
+          f"(옥내 {enc.get('옥내', 0)} · 혼합 {enc.get('혼합', 0)} 제외 — A-15)")
+    print("시뮬 입력 용량 = 총 면수(전 후보 동일) · 실가용 면수 "
+          f"{cands.attrs['capacity_available_note']}는 참고 컬럼")
+
+    assign = assign_dong_candidates(cands)
+    print(f"\n동 {len(assign)}개 · 경계 밖 후보 {assign.attrs['n_outside_boundary']}곳\n")
+
+    summ = assignment_summary(assign)
+    print(summ.to_string(index=False,
+                         formatters={"dist_median_m": lambda v: f"{v:,.0f}" if pd.notna(v) else "—",
+                                     "dist_max_m": lambda v: f"{v:,.0f}" if pd.notna(v) else "—",
+                                     "capacity_sum": lambda v: f"{v:,.0f}"}))
+    n_ok = int(assign["is_assigned"].sum())
+    print(f"\n최종 배정 {n_ok}개 동 / {len(assign)} ({n_ok / len(assign):.1%})"
+          f" · 서로 다른 후보 {assign['cand_id'].nunique()}곳")
+    print(f"대체 배정 1.2km 초과 {int((assign['is_assigned'] & assign['assign_rule'].ne(RULE_INSIDE) & (assign['dist_m'] > EDGE_RADIUS_M)).sum())}곳"
+          f" · 내부 배정 중 중심점 1.2km 초과 {int(assign['cand_beyond_cap'].sum())}곳(표시만)")
+
+    un = assign[~assign["is_assigned"]]
+    print(f"\n미배정 {len(un)}개 동 — 후보 없음으로 확정")
+    metrics_path = OUTPUT_PATH.parent / "dong_metrics.csv"
+    if metrics_path.exists():
+        m = pd.read_csv(metrics_path)[["gu", "dong_canon", "n_calls", "wait_total_mean"]]
+        un = un.merge(m, on=["gu", "dong_canon"], how="left")
+        big = un[un["n_calls"] >= 100]
+        print(f"  콜 100건 이상 {len(big)}개 동 (합 {big['n_calls'].sum():,.0f}건)"
+              " — 수요가 없어서 빠지는 게 아니다. 대표점 재계산 대기분이다")
+        print(big.nlargest(10, "n_calls")[
+            ["gu", "dong_canon", "n_calls", "wait_total_mean", "nearest_dist_m"]]
+            .to_string(index=False, float_format=lambda v: f"{v:,.1f}"))
+
+    pending = assign[assign["assign_rule"] == RULE_PENDING]
+    print(f"\n보류(대표점 재검토) {len(pending)}개 동 — 콜 정제 이후 재산출")
+    print(pending[["gu", "dong_canon", "area_km2", "nearest_dist_m"]]
+          .sort_values("area_km2", ascending=False)
+          .to_string(index=False, float_format=lambda v: f"{v:,.2f}"))
+
+    named = pending[[(g, d) in CENTROID_RECALC_DONG
+                     for g, d in zip(pending["gu"], pending["dong_canon"])]]
+    print(f"\n  그 중 재계산 지정 {len(named)}개 동 "
+          f"(법정동 {' · '.join(CENTROID_RECALC_BDONG)}):")
+    print("  " + " · ".join(f"{g} {d}" for g, d in
+                            zip(named["gu"], named["dong_canon"])))
+
+    air = assign[assign["assign_rule"] == RULE_AIRPORT]
+    print(f"\n공항·개발제한 {len(air)}개 동 — 시뮬 대상 제외")
+    print(air[["gu", "dong_canon", "area_km2", "nearest_dist_m"]]
+          .to_string(index=False, float_format=lambda v: f"{v:,.2f}"))
+
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    assign.to_csv(OUTPUT_PATH, index=False, encoding="utf-8-sig")
+    print(f"\n저장: {OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

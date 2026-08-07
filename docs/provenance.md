@@ -14,6 +14,7 @@ cd simulation
 .venv\Scripts\python.exe src/travel_time.py   # 이동시간 테이블·커버율·오차
 .venv\Scripts\python.exe src/metrics.py       # 동별 지표 산출 + 검증 6개 대조
 .venv\Scripts\python.exe src/idle.py          # 유휴 구간 건수·분포·시간대별 동시 유휴
+.venv\Scripts\python.exe src/candidates.py    # 동별 후보 배정(규칙별 동 수·보류 목록)
 ```
 
 실행 환경은 `simulation/.venv` 다(전역 파이썬 아님). 검증된 버전 조합은
@@ -48,7 +49,10 @@ cd simulation
 |---|---|
 | 동 조회표 | 674개 키 — exact 426 / approx 245 / manual 3 |
 | 차고지 | 44개, 차량 **691대** |
-| 후보지 | 1,456곳(전부 시영), 총 주차면 16,463면. 좌표 없어 제외 **733곳(전부 구영)** |
+| 후보 풀 | **639곳** — 옥외 348곳 24,392면 / 옥내 163곳 17,386면 / 혼합 128곳 14,020면 |
+| 후보(옥외만) | **348곳 24,392면** — 옥내·혼합 291곳 제외(A-15) |
+| 시뮬 입력 용량 | `capacity` = **총 면수**(전 후보 동일 기준) |
+| 실가용 면수(참고) | 시영 **65곳** 부착 — 옥외 53곳 3,528면 → **744면** |
 | 과소공급 동 | 68개 (`vehicles_3km` 0~10대) |
 | 콜 | **1,527,213건** (원본 1,729,476행) |
 | 기간 | 2025-01-01 ~ 2025-12-31 |
@@ -310,7 +314,52 @@ cd simulation
 추정 방법·한계는 [calibration.md 인내심 절](calibration.md) 에 있다.
 산출물은 `outputs/patience_km.csv`(0.5분 격자), `outputs/patience_summary.csv`.
 
-## 11. 시뮬레이터
+## 11. `python src/candidates.py` 출력 — 동별 후보 배정
+
+행정동 **426개**에 옥외 후보 348곳을 배정한 결과. 규칙과 근거는
+[`src/candidates.py`](../src/candidates.py) 모듈 docstring,
+후보 풀 자체는 [sim-pool.pipeline.v4.md](sim-pool.pipeline.v4.md).
+
+| 규칙 | 동 | 서로 다른 후보 | 대체거리 중앙 | 최대 | 총 면수 합 |
+|---|---:|---:|---:|---:|---:|
+| ⑴ 내부 | **204** | 204 | 396m | 2,562m | 17,959 |
+| ⑵ 1km대체 | **134** | 108 | 661m | 995m | 7,379 |
+| ⑶ 경계선상 (1.0~1.2km) | **40** | 36 | 1,078m | 1,198m | 2,596 |
+| ⑶ 공항·개발제한 (제외) | **1** | — | — | — | — |
+| ⑶ 보류 — 대표점 재검토 | **47** | — | — | — | — |
+
+**최종 배정 378개 동 / 426 (88.7%)**, 실제로 쓰이는 서로 다른 후보 **243곳**
+(348곳 중). 경계 밖으로 떨어진 후보 0곳.
+
+**대체 배정 1.2km 초과 0곳** — 상한은 코드에서 끊는다(초과가 남으면 예외).
+⑴ 내부는 상한 대상이 아니며(후보가 동 안에 있다), 중심점에서 1.2km 넘게
+떨어진 **10곳**만 `cand_beyond_cap` 으로 표시한다 — 진관동 1,900m ·
+공항동 1,892m · 양재2동 2,562m 등, 전부 같은 대표점 문제다.
+
+**미배정 48개 동 — 후보 없음으로 확정.** 다만 수요가 없어서가 아니다.
+
+| | 값 |
+|---|---|
+| 콜 100건 이상 | **46개 동** (합 **171,375건**) |
+| 최대 | 서대문 연희동 15,572건 · 광진 구의2동 11,682 · 강동 둔촌2동 11,258 |
+| 대기 최악 | 관악 남현동 62.8분 · 인헌동 58.4 · 대학동 54.5 · 청림동 52.9 |
+
+**이 동들은 진단에서 빠지는 게 아니라 대표점 재계산을 기다리는 것**이다.
+특장차 한정 콜 정제 뒤 콜 발생 가중 중심으로 다시 잡아 재배정한다.
+재계산 지정은 법정동 **도봉·정릉·평창·공릉·구기·홍은** —
+행정동 격자에서는 **도봉1동 · 공릉2동 · 홍은2동 · 정릉1~4동 7곳**이고
+(`candidates.CENTROID_RECALC_DONG`), 행정동 평창동은 이미 내부 배정
+(비봉(구) 1,137m), 구기동은 행정동이 아니라 법정동이다.
+보류 47동 전체 목록은 `outputs/dong_candidates.csv` 의
+`assign_rule == '보류_대표점'` 행.
+
+**배정 후보의 실가용 면수가 10면 미만인 동 21개** — 전부 시영이다.
+용량 자체는 총 면수로 넣으므로 시뮬에는 영향이 없고, A-08(차고지별 10대 이상)과
+맞물리는 **후보 품질 문제**라 시뮬 뒤 후보를 좁힐 때 쓴다.
+
+산출물은 `outputs/dong_candidates.csv` (426행).
+
+## 12. 시뮬레이터
 
 `src/simulator.py` 는 **뼈대만 있고 구현되지 않았다**(`raise NotImplementedError`).
 따라서 **before/after 비교값·배치안 평가 결과는 아직 산출된 것이 없다.**
@@ -353,5 +402,7 @@ cd simulation
 | 동 좌표 조회표 | `build_dong_lookup()`, `canon_dong()`, `_base_dong()` | `load` |
 | 운행 로딩 | `load_rides()`, `load_vehicle_trips()` | `travel_time`, `load` |
 | 거점·후보지·인구 | `load_depots()`, `load_candidates()`, `load_disabled_population()` | `load` |
+| 시영 실가용 면수 | `load_peak_residual()`, `find_foia_parking_xlsx()` | `load` |
+| 동별 후보 배정 | `assign_dong_candidates()`, `locate_candidates()`, `assignment_summary()` | `candidates` |
 | 유휴 구간 | `load_trips()`, `build_gaps()`, `hourly_concurrency()` | `idle` |
 | 인내심 곡선 | `build_observations()`, `kaplan_meier()`, `km_grid()` | `patience` |
