@@ -71,6 +71,35 @@ def test_resume_skips_done_pairs(tmp_path, monkeypatch):
     assert len(E.load_results(p)) == 3
 
 
+def test_parse_seeds():
+    assert E.parse_seeds("42,43") == (42, 43)
+    assert E.parse_seeds(" 44 ") == (44,)
+    assert E.parse_seeds(None) == ()
+    assert E.parse_seeds("") == ()
+
+
+def test_seed_is_the_outer_loop(tmp_path, monkeypatch):
+    """시드 하나로 후보 전부를 돈 뒤 다음 시드로 넘어가야 한다.
+
+    후보별로 시드를 다 돌면 중간에 멈췄을 때 앞쪽 후보만 반복이 쌓이고 뒤쪽은
+    비어 σ 를 낼 수 없다 — 비교할 수 없는 결과가 남는다.
+    """
+    p = tmp_path / "eval.csv"
+    cands = pd.DataFrame({"cand_id": [1, 2, 3], "cand_name": ["a", "b", "c"],
+                          "lat": [37.5] * 3, "lon": [127.0] * 3,
+                          "capacity": [10] * 3, "gu": ["종로구"] * 3,
+                          "dongs": ["x"] * 3, "n_dong_assigned": [1] * 3})
+    monkeypatch.setattr(E.S, "run_placement", lambda pl, *a, **k: pd.DataFrame())
+    monkeypatch.setattr(E, "scope_members", lambda *a, **k: {("종로구", "사직동")})
+    monkeypatch.setattr(E, "scope_pickup", lambda log, m: (14.0, 4000))
+
+    E.run_stage(2, cands, (42, 43), calls=None, depots=None, mx=None,
+                reservation=None, dong_xy=None, path=p)
+    got = E.load_results(p)
+    assert list(got["seed"]) == [42, 42, 42, 43, 43, 43],         f"시드가 바깥 루프가 아니다: {list(zip(got['seed'], got['cand_id']))}"
+    assert list(got["cand_id"]) == [1, 2, 3, 1, 2, 3]
+
+
 def test_shortlist_is_by_improvement_rate():
     """2단계 대상은 개선율(음수가 클수록 좋음) 상위 N."""
     res = _rows([(1, [-5.0]), (2, [-1.0]), (3, [-3.0]), (4, [+0.5])], stage=1)

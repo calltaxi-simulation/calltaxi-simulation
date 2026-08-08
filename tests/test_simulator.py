@@ -256,6 +256,12 @@ def test_placement_adds_ten_vehicles(matrix):
     assert out["capacity"].iloc[-1] == S.NEW_DEPOT_VEHICLES
     assert out["capacity"].iloc[:-1].tolist() == base["capacity"].tolist()
 
+    # **배속은 인자로 못 바꾼다.** 증차량이 상수라야 후보별 차이가 위치에서만
+    # 나온다는 해석이 성립한다(A-10). 넘겨받은 값이 있어도 무시해야 한다.
+    forced = S.resolve_placement(
+        {"name": "신규", "lat": 37.49, "lon": 127.02, "capacity": 30}, base)
+    assert forced["capacity"].iloc[-1] == S.NEW_DEPOT_VEHICLES
+
 
 def test_reservation_deduction_holds_vehicles_back(matrix, monkeypatch):
     """A-11 — 차감 대수만큼은 배차되지 않고 남는다."""

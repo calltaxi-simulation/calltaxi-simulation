@@ -22,6 +22,9 @@ outputs/*
 !outputs/patience_km.csv
 !outputs/patience_summary.csv
 !outputs/dong_candidates.csv
+# 후보 평가 결과 — 대시보드가 읽고 발표 근거이기도 하다(244 × 3시드 ≈ 732행)
+!outputs/placement_eval.csv
+!outputs/placement_grades.csv
 # patience_km.csv 는 0.5분 격자로 눌러 42KB 다. 이벤트 시점 8만 개를 그대로
 # 두면 5MB 가 넘어 저장소에 넣을 수 없다(src/patience.py 의 km_grid 참조).
 # dong_metrics.parquet 은 위 csv 와 같은 내용의 직렬화 중복이라 뺀다 —

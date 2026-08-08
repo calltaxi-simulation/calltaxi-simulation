@@ -4,13 +4,18 @@ evaluate.py — 배치안 후보 평가
 `outputs/dong_candidates.csv` 의 배정된 후보 244곳을 하나씩 시뮬에 넣어
 **거점 3km 안 동들의 픽업이 얼마나 줄어드는가**를 잰다.
 
-    .venv/Scripts/python.exe src/evaluate.py            # 1단계 → 2단계 → 등급
-    .venv/Scripts/python.exe src/evaluate.py --stage 1  # 1단계만
-    .venv/Scripts/python.exe src/evaluate.py --grade    # 이미 있는 결과로 등급만
+    .venv/Scripts/python.exe src/evaluate.py                      # 1단계 → 2단계 → 등급
+    .venv/Scripts/python.exe src/evaluate.py --stage 1            # 1단계만
+    .venv/Scripts/python.exe src/evaluate.py --stage 2 --seeds 42,43
+    .venv/Scripts/python.exe src/evaluate.py --grade              # 결과로 등급만
 
 **중간에 끊겨도 이어서 돌린다.** 후보 하나가 끝날 때마다 CSV 에 덧붙이고, 다시
-실행하면 이미 있는 (cand_id, seed) 는 건너뛴다. 1단계가 3.4시간이라 한 번에
-끝나지 않는 것을 전제로 짰다.
+실행하면 이미 있는 (cand_id, seed) 는 건너뛴다. 한 번에 끝나지 않는 것을 전제로 짰다.
+
+**시드를 나눠 돌릴 수 있다**(`--seeds`). 컴퓨터를 밤새 켜둘 수 없을 때
+오늘 42·43, 내일 44 식으로 쪼갠다. **바깥 루프가 시드다** — 시드 하나로 후보
+전부를 돈 뒤 다음 시드로 넘어간다. 후보별로 3회씩 돌면 중간에 멈췄을 때 앞쪽
+후보만 3회, 뒤쪽은 0회가 되어 **비교할 수 없는 결과가 남는다.**
 
 ─────────────────────────────────────────────────────────────
 왜 이렇게 재는가 — 근거는 docs/model_flow.md 「후보 평가」 절
@@ -153,6 +158,10 @@ def run_stage(stage: int, cands: pd.DataFrame, seeds, *, calls, depots, mx,
               reservation, dong_xy, path: Path = RESULT_PATH) -> pd.DataFrame:
     """후보 × 시드를 돌려 CSV 에 덧붙인다. **이미 있는 조합은 건너뛴다.**
 
+    **바깥 루프가 시드다.** 시드 하나로 후보 전부를 돈 뒤 다음 시드로 넘어간다 —
+    후보별로 시드를 다 돌면 중간에 멈췄을 때 앞쪽 후보만 반복이 쌓이고 뒤쪽은
+    비어 σ 를 낼 수 없는 결과가 남는다.
+
     before 는 시드마다 한 번만 돌리고 메모리에 들고 있는다 — 후보마다 범위가
     달라 집계는 다시 하지만, 재생 자체는 배치안이 같으면 같은 결과다.
     """
@@ -160,7 +169,7 @@ def run_stage(stage: int, cands: pd.DataFrame, seeds, *, calls, depots, mx,
     have = set(zip(done.get("cand_id", []), done.get("seed", [])))
 
     baseline: dict[int, pd.DataFrame] = {}
-    todo = [(r, s) for r in cands.itertuples() for s in seeds
+    todo = [(r, s) for s in seeds for r in cands.itertuples()
             if (r.cand_id, s) not in have]
     print(f"[{stage}단계] 후보 {len(cands)} × 시드 {len(seeds)} = "
           f"{len(cands) * len(seeds)}건 중 **{len(todo)}건** 남음")
@@ -195,6 +204,13 @@ def run_stage(stage: int, cands: pd.DataFrame, seeds, *, calls, depots, mx,
                   f"{cand.cand_name[:14]} {(a - b) / b * 100:+.2f}%  "
                   f"(남은 예상 {left:.0f}분)")
     return load_results(path)
+
+
+def parse_seeds(text: str | None) -> tuple:
+    """`--seeds 42,43` → (42, 43). 없으면 빈 튜플(단계 기본값을 쓴다)."""
+    if not text:
+        return ()
+    return tuple(int(x) for x in text.replace(" ", "").split(",") if x)
 
 
 def stage2_shortlist(results: pd.DataFrame, top_n: int = STAGE2_TOP_N) -> list:
@@ -326,6 +342,9 @@ def main(argv=None):
                     help="한 단계만 실행. 기본은 1 → 2 연속")
     ap.add_argument("--grade", action="store_true",
                     help="재생하지 않고 이미 있는 결과로 등급만 매긴다")
+    ap.add_argument("--seeds", type=str, default=None,
+                    help="쉼표로 구분한 시드 목록(예: 42,43). 나눠 돌릴 때 쓴다. "
+                         "생략하면 1단계 42 · 2단계 42,43,44")
     ap.add_argument("--top", type=int, default=STAGE2_TOP_N)
     ap.add_argument("--limit", type=int, default=None,
                     help="후보 수 제한(시험용)")
@@ -359,18 +378,31 @@ def main(argv=None):
 
     kw = dict(calls=sub, depots=depots, mx=mx, reservation=reservation,
               dong_xy=dong_xy)
+    picked = parse_seeds(args.seeds)
 
     if args.stage in (None, 1):
-        run_stage(1, cands, STAGE1_SEEDS, **kw)
+        run_stage(1, cands, picked or STAGE1_SEEDS, **kw)
 
     if args.stage in (None, 2):
         results = load_results()
         short = stage2_shortlist(results, args.top)
         print(f"\n[2단계 대상] 1단계 개선율 상위 {len(short)}곳 "
               f"(컷 {args.top} 는 사전 고정값)")
-        run_stage(2, cands[cands["cand_id"].isin(short)], STAGE2_SEEDS, **kw)
+        run_stage(2, cands[cands["cand_id"].isin(short)],
+                  picked or STAGE2_SEEDS, **kw)
 
-        graded = assign_grades(load_results())
+        # 시드를 다 돌리기 전에는 등급을 매기지 않는다 — 반복이 덜 쌓인 σ 로
+        # 경계를 가르면 나중에 시드를 채웠을 때 등급이 달라진다.
+        results = load_results()
+        have = {int(s) for s in results.loc[results["cand_id"].isin(short), "seed"]}
+        missing = [s for s in STAGE2_SEEDS if s not in have]
+        if missing:
+            print(f"\n[등급 보류] 시드 {missing} 가 아직 없다. 다 돌린 뒤 "
+                  f"`--grade` 로 매길 것 — 반복이 덜 쌓인 σ 로 가르면 경계가 흔들린다.")
+            print(f"저장: {RESULT_PATH}")
+            return
+
+        graded = assign_grades(results)
         graded.to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
         print(f"\n[등급] {graded['grade'].nunique()}개 등급 · {len(graded)}곳\n")
         print(grade_report(graded))

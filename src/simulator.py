@@ -428,14 +428,18 @@ def resolve_placement(placement, depots: pd.DataFrame) -> pd.DataFrame:
     """배치안을 거점 표로 편다. 반환은 `depots` 와 같은 스키마 + 신규 행.
 
     placement 로 받는 것:
-      None                              현행 배치(44곳). before 쪽
-      int                               `outputs/dong_candidates.csv` 의 `cand_id`
-      dict(name, lat, lon[, capacity])  좌표를 직접 준다
-      DataFrame                         위 dict 여러 건
+      None                    현행 배치(44곳). before 쪽
+      int                     `outputs/dong_candidates.csv` 의 `cand_id`
+      dict(name, lat, lon)    좌표를 직접 준다
+      DataFrame               위 dict 여러 건
 
-    신규 거점의 배속은 기본 10대다(A-10). **기존 44곳의 배속은 건드리지 않는다** —
-    차감 방식(최근접/여유/비례)이 전부 임의 기준을 도입하고 신설 공문에도 차감
-    사례가 없다. 증차량이 상수이므로 후보별 차이는 위치에서만 생긴다.
+    **신규 거점의 배속은 언제나 10대다**(A-10 · `NEW_DEPOT_VEHICLES`). 규모를
+    인자로 받지 않는다 — 배정 단위 10대에는 문서 근거가 있고(A-08), 규모를
+    바꿀 수 있게 두면 **증차량이 상수라는 전제가 깨져 후보별 차이가 위치에서만
+    나온다는 해석이 무너진다.**
+
+    **기존 44곳의 배속은 건드리지 않는다** — 차감 방식(최근접/여유/비례)이 전부
+    임의 기준을 도입하고 신설 공문에도 차감 사례가 없다.
     """
     if placement is None:
         return depots.copy()
@@ -455,8 +459,8 @@ def resolve_placement(placement, depots: pd.DataFrame) -> pd.DataFrame:
     missing = {"name", "lat", "lon"} - set(new.columns)
     if missing:
         raise ValueError(f"배치안에 없는 컬럼: {sorted(missing)}")
-    if "capacity" not in new.columns:
-        new["capacity"] = NEW_DEPOT_VEHICLES
+    # 배속은 고정이다. 넘겨받은 값이 있어도 쓰지 않는다(A-10).
+    new["capacity"] = NEW_DEPOT_VEHICLES
 
     out = pd.concat([depots, new], ignore_index=True)
     out["depot_id"] = np.arange(1, len(out) + 1)
