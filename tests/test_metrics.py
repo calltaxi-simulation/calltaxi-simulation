@@ -593,6 +593,26 @@ def test_overall_metrics_pass_verification(calls):
     assert (ref["차이"].abs() < 0.5).all()
 
 
+def test_judged_gini_is_pickup_not_total_wait():
+    """판정 지니는 **픽업**이다. 총 대기 지니는 참고로만 둔다.
+
+    둘은 값이 비슷해(0.070 vs 0.092) 문서에서 뒤바뀌어도 눈에 안 띈다. 실제로
+    한 번 뒤바뀐 적이 있어(calibration 표가 총 대기 값을 판정 기준으로 실었다)
+    여기서 고정한다. 총 대기 지니로 채점하면 재현하지 않기로 한 매칭 구간이
+    형평 점수로 넘어온다(A-19).
+    """
+    assert "pickup_gini" in metrics.TARGETS
+    assert "gini_dong" not in metrics.TARGETS
+    assert "gini_dong" in metrics.REFERENCE_TARGETS
+    assert "pickup_gini" not in metrics.REFERENCE_TARGETS
+    # 두 값을 뒤바꿔 적으면 걸리게 — 픽업 쪽이 더 낮다
+    assert metrics.TARGETS["pickup_gini"] < metrics.REFERENCE_TARGETS["gini_dong"]
+    assert metrics.TARGETS["pickup_gini"] == pytest.approx(0.070, abs=0.001)
+    assert metrics.REFERENCE_TARGETS["gini_dong"] == pytest.approx(0.092, abs=0.001)
+    # 판정 지표는 전부 허용오차가 있어야 한다
+    assert set(metrics.TARGET_TOL) == set(metrics.TARGETS)
+
+
 def test_period_targets_round_trip(calls):
     """구간 실측에서 뽑은 기준으로 그 구간을 채점하면 차이가 0이다."""
     tg, ref = metrics.period_targets(calls)
