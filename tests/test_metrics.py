@@ -122,31 +122,42 @@ def test_dong_count_matches_original_analysis(calls):
 
 
 @pytest.mark.slow
-def test_dong_means_match_original_analysis(calls, data_dir):
-    """동별 평균대기가 원본 산출물과 일치해야 한다(원본은 소수 1자리 반올림)."""
+def test_dong_keys_align_with_original_analysis(calls, data_dir):
+    """동 키가 원본 산출물과 어긋나지 않아야 한다.
+
+    **값은 더 이상 일치하지 않는다.** 원본 산출물(서울즉시콜_동별_대기격차.csv)은
+    임차택시를 포함한 152.7만 건에서 만든 것이고 지금 모집단은 특장차 한정
+    122.2만 건이다(A-16). 건수는 동마다 중앙 79.8% 로 줄고 평균대기는 중앙
+    +1.25분 오른다. 재현 검사가 아니라 **동명 정규화가 깨지지 않았는지**를 보는
+    검사로 남긴다 — 430개 동이 그대로 맞물리고 순위 구조가 유지되는지.
+    """
     orig = pd.read_csv(load.DATA_DIR / "서울즉시콜_동별_대기격차.csv", encoding="utf-8-sig")
     orig = orig.rename(columns={"출발구": "gu", "출발동": "dong",
                                 "평균": "orig_mean", "건수": "orig_n"})
     m = metrics.dong_wait_table(calls).merge(orig, on=["gu", "dong"], how="inner")
-    assert len(m) == 430
-    assert (m["n_calls"] == m["orig_n"]).all(), "동별 건수가 원본과 어긋난다"
-    assert (m["mean_wait"] - m["orig_mean"]).abs().max() < 0.06
+    assert len(m) == 430, "동 키가 원본과 맞물리지 않는다 — 동명 정규화를 의심할 것"
+    # 특장차만 남기므로 어느 동도 건수가 늘 수 없다
+    assert (m["n_calls"] < m["orig_n"]).all()
+    assert (m["n_calls"] / m["orig_n"]).median() == pytest.approx(0.80, abs=0.02)
+    assert m["mean_wait"].corr(m["orig_mean"]) > 0.98, "동 간 순위 구조가 뒤집혔다"
 
 
 @pytest.mark.slow
 def test_gini_reproduces_target(calls):
-    """검증 기준 0.095 는 정본인 동 균등가중으로 재현된다(calibration.md † 각주)."""
+    """검증 기준 0.092 는 정본인 동 균등가중으로 재현된다(calibration.md † 각주)."""
     assert metrics.dong_gini(calls) == pytest.approx(
         metrics.TARGETS["gini_dong"], abs=0.002)
     # 콜수 가중(참고용, 채점 대상 아님)은 다른 값이라는 사실을 고정해 둔다
-    assert metrics.dong_gini(calls, weighted=True) == pytest.approx(0.101, abs=0.002)
+    assert metrics.dong_gini(calls, weighted=True) == pytest.approx(0.0986, abs=0.002)
 
 
 @pytest.mark.slow
 def test_cancel_ratio_matches_corrected_target(calls):
-    """정정된 취소율 타깃 13.3% 가 시뮬 입력 모수에서 재현되는지."""
+    """취소율 타깃 15.44% 가 시뮬 입력 모수에서 재현되는지."""
     assert calls["is_canceled"].mean() == pytest.approx(
         metrics.TARGETS["cancel_ratio"], abs=0.002)
+    # metrics 쪽 판정도 같은 값이어야 한다 — load 컬럼과 갈라지면 안 된다
+    assert (metrics.is_canceled(calls).to_numpy() == calls["is_canceled"].to_numpy()).all()
 
 
 # ─────────────────────────────────────────────────────────────

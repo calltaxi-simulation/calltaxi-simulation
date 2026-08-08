@@ -12,14 +12,29 @@
 
     여기서 내는 건 구간의 길이이지 가용 대수가 아니다 — A-01(유휴 ≠ 가용).
 
-입력  calltaxi_2025_merged.csv (차량번호 병합본)
+입력  calls_2025_replay.csv (특장차 한정본 — load.CALLS_FILE)
 필터  승차·하차 시각이 모두 기록된 완료 운행 + 배차 시각 기록 + 차량번호 있음
       load.load_vehicle_trips 와 동일 기준을 별도 구현한 것이다(import 하지 않는다).
       load 쪽 상수가 바뀌면 함께 갱신 필요.
       단, 운행시간 1~120분 컷은 걸지 않는다 — 이상하게 긴 운행도 그동안 차량이
       묶여 있던 것은 같아서다.
 
-산출  유휴 구간 건수 / 길이 분포(중앙·p90) / 시간대별 동시 유휴 차량 수
+      **정산 미기록 616건(calibration.md 흡수 사실 ⑵)은 담지 못한다.** 배차→하차 중앙 56.6분만큼
+      차량이 묶여 있었으므로 그만큼 유휴가 과대 계상되지만, 이 건들은 승차 시각도
+      차량번호도 없어 어느 차량의 시퀀스에 끼워 넣을지 알 수 없다. 완료 운행
+      103만 건 대비 0.06%라 분포에는 영향이 거의 없다.
+
+**일 경계는 구조적으로 이미 잘려 있다(A-01 조치 ⑵).** 구간이 '당일 내'로 잡히려면
+끝점(다음 배차)이 같은 날이어야 하고, 그러면 그 차량은 그 날 다시 일했다는 뜻이다.
+따라서 **그 날 마지막 하차 이후 구간은 예외 없이 '자정 넘김'으로 빠진다** — 근무
+종료분이 저녁 시간대에 얹히는 일은 없다. 시간대별 동시 유휴는 당일 내 구간만 쓴다.
+
+**남은 과대 계상은 일 경계가 아니라 긴 당일 구간이다.** 당일 내 구간의 2.0%(120분
+초과)가 총 유휴 분의 **20.4%** 를 차지한다. 식사·교대·충전이 여기 섞여 있고
+(A-01: 유휴 ≠ 가용), 이 구간을 빼면 13시 최대가 134.1 → 111.4대로 17% 내려간다.
+임계 θ 는 아직 미정이라 자르지 않고 **민감도를 함께 산출**한다(`CAP_MINUTES`).
+
+산출  유휴 구간 건수 / 길이 분포(중앙·p90) / 시간대별 동시 유휴 차량 수(평일·주말 분리)
       outputs/idle_gaps.csv, outputs/idle_by_hour.csv
 
 실행 (저장소 루트에서)
@@ -39,10 +54,21 @@ DATA_DIR = (Path(os.environ.get("DATA_DIR", "").strip()).expanduser().resolve()
             if os.environ.get("DATA_DIR", "").strip() else REPO.parent / "data")
 OUT_DIR = REPO / "outputs"
 
-SRC = DATA_DIR / "calltaxi_2025_merged.csv"
+SRC = DATA_DIR / "calls_2025_replay.csv"        # load.CALLS_FILE 과 같은 파일
 USECOLS = ["차량번호", "배차일시", "승차일시", "하차일시"]
 
 MINUTES_PER_DAY = 1440
+
+# 민감도용 상한(분). 이보다 긴 당일 구간은 식사·교대·근무외가 섞여 있을 가능성이
+# 커서, 잘랐을 때 동시 유휴가 얼마나 줄어드는지를 함께 낸다. **분포 산출에서
+# 실제로 자르지는 않는다** — 임계 θ 는 A-01 잔여 조치로 아직 정해지지 않았다.
+CAP_MINUTES = 120
+
+# 동시 유휴 대수의 분모. 차고지 정원(691대)이나 연간 누적 차량번호(723대)가 아니라
+# **그 날 실제로 나온 대수**여야 한다 — metrics.daily_active_vehicles() 의 요일별
+# 중앙값이다(평일 574 / 주말 374, 접수일 기준).
+FLEET_WEEKDAY, FLEET_WEEKEND = 574, 374
+DEPOT_CAPACITY = 691
 
 
 def load_trips(path: Path = SRC) -> pd.DataFrame:
@@ -157,6 +183,13 @@ def main():
     dist(cross, "자정 넘김")
     print("  자정을 넘긴 구간은 근무 종료~다음 근무 시작(비운행 시간)이 섞여 있다.")
 
+    # 일 경계 처리 확인 — 당일 내 구간은 끝점이 같은 날이므로 그 차량이 그 날 다시
+    # 일했다는 뜻이고, 따라서 '그 날 마지막 하차 이후'는 전부 자정 넘김으로 빠진다.
+    day = same["end"].dt.normalize()
+    assert (same["start"].dt.normalize() == day).all()
+    print("\n[일 경계] 당일 내 구간은 끝점이 같은 날 = 그 날 다시 운행한 차량이다."
+          " 근무 종료 후 구간은 전부 자정 넘김으로 빠진다 → 저녁 과대 없음(A-01 ⑵)")
+
     n_days = int(same["start"].dt.normalize().nunique())
     by_hour = hourly_concurrency(same, n_days)
     print(f"\n[시간대별 평균 동시 유휴 차량 수] 당일 내 구간 {len(same):,}건 · {n_days}일 기준")
@@ -165,8 +198,36 @@ def main():
         print(f"  {int(r['hour']):>2}시  {r['mean_idle_vehicles']:6.1f}대  {bar}")
 
     peak = by_hour.loc[by_hour["mean_idle_vehicles"].idxmax()]
-    print(f"  최대 {int(peak['hour'])}시 {peak['mean_idle_vehicles']:.1f}대 / "
-          f"차고지 정원 합 691대 대비 {peak['mean_idle_vehicles'] / 691:.1%}")
+    print(f"  최대 {int(peak['hour'])}시 {peak['mean_idle_vehicles']:.1f}대")
+
+    # 요일별 — 평일과 주말은 가동 대수가 1.5배 갈려 섞으면 둘 다 아닌 값이 된다.
+    print("\n[요일별] 분모는 그 날 실제로 나온 대수다(차고지 정원 691대가 아니다)")
+    parts = {}
+    for label, mask, fleet in (("평일", same["start"].dt.weekday < 5, FLEET_WEEKDAY),
+                               ("주말", same["start"].dt.weekday >= 5, FLEET_WEEKEND)):
+        g = same[mask]
+        nd = int(g["start"].dt.normalize().nunique())
+        h = hourly_concurrency(g, nd)
+        pk = h.loc[h["mean_idle_vehicles"].idxmax()]
+        parts[label] = (pk, fleet, nd, h)
+        print(f"  {label} {nd:>3}일  최대 {int(pk['hour'])}시 "
+              f"{pk['mean_idle_vehicles']:6.1f}대 / 가동 {fleet}대 대비 "
+              f"{pk['mean_idle_vehicles'] / fleet:5.1%}"
+              f"   (정원 {DEPOT_CAPACITY}대 대비 {pk['mean_idle_vehicles'] / DEPOT_CAPACITY:.1%})")
+
+    # 긴 당일 구간 민감도 — 자르지는 않고 얼마나 줄어드는지만 본다(A-01 θ 미정)
+    long = same["idle_min"] > CAP_MINUTES
+    share = same.loc[long, "idle_min"].sum() / same["idle_min"].sum()
+    capped = hourly_concurrency(same[~long], n_days)
+    cpk = capped.loc[capped["mean_idle_vehicles"].idxmax()]
+    ev = by_hour.loc[by_hour["hour"].between(17, 21), "mean_idle_vehicles"].mean()
+    cev = capped.loc[capped["hour"].between(17, 21), "mean_idle_vehicles"].mean()
+    print(f"\n[민감도] 당일 내 {CAP_MINUTES}분 초과 {int(long.sum()):,}건({long.mean():.1%})이"
+          f" 총 유휴 분의 {share:.1%}를 차지한다")
+    print(f"  잘라내면 최대 {peak['mean_idle_vehicles']:.1f} → {cpk['mean_idle_vehicles']:.1f}대"
+          f" · 저녁(17~21시) 평균 {ev:.1f} → {cev:.1f}대")
+    print("  → 식사·교대·충전이 섞인 구간이다(A-01: 유휴 ≠ 가용). 임계 θ 가 정해지기"
+          " 전까지 위 대수를 공급량으로 환산하면 안 된다.")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     summary = pd.DataFrame([{
@@ -183,6 +244,15 @@ def main():
         "n_days": n_days,
         "peak_hour": int(peak["hour"]),
         "peak_mean_idle_vehicles": float(peak["mean_idle_vehicles"]),
+        "peak_weekday": float(parts["평일"][0]["mean_idle_vehicles"]),
+        "peak_weekend": float(parts["주말"][0]["mean_idle_vehicles"]),
+        "fleet_weekday": FLEET_WEEKDAY,
+        "fleet_weekend": FLEET_WEEKEND,
+        "peak_share_weekday": float(parts["평일"][0]["mean_idle_vehicles"] / FLEET_WEEKDAY),
+        "peak_share_weekend": float(parts["주말"][0]["mean_idle_vehicles"] / FLEET_WEEKEND),
+        "cap_minutes": CAP_MINUTES,
+        "long_gap_share_of_minutes": float(share),
+        "peak_capped": float(cpk["mean_idle_vehicles"]),
     }])
     summary.to_csv(OUT_DIR / "idle_gaps.csv", index=False, encoding="utf-8-sig")
     by_hour.to_csv(OUT_DIR / "idle_by_hour.csv", index=False, encoding="utf-8-sig")

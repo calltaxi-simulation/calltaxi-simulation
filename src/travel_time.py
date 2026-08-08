@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from load import CACHE_DIR, DATA_DIR, MANUAL_DONG, SEOUL_GU, canon_dong
+from load import CACHE_DIR, CALLS_FILE, DATA_DIR, MANUAL_DONG, SEOUL_GU, canon_dong
 from load import _base_dong as base_dong   # 좌표 매칭 규칙은 load.py 와 하나로 유지한다
 
 __all__ = ["TravelTime", "get_travel_time", "load_rides", "build_od_table",
@@ -120,18 +120,20 @@ _RIDE_COLS = ["승차일시", "하차일시", "출발구", "출발동",
 
 
 def load_rides(path: Path = None) -> pd.DataFrame:
-    """calltaxi 병합본에서 이동시간 산출에 쓸 운행만 남긴다.
+    """콜 원본(특장차 한정본)에서 이동시간 산출에 쓸 운행만 남긴다.
 
     필터(단계별 잔존 건수는 attrs['funnel'] 에 담는다):
       승차·하차 시각이 모두 기록 — 취소·미탑승 건을 뺀 완료 운행
       출발·목적 모두 서울 25구  — 경기·인천 편도는 뺀다
       운행시간 1~120분          — 하차 − 승차
-      승차거리 > 0
+      승차거리 > 0              — 0 은 결측 대체값이다(calibration.md 흡수 사실 ⑴). 완료 건 4,636건이
+                                  여기서 빠진다 — 운행은 했으나 거리가 안 남은 건이라
+                                  km·kmh 를 만들 수 없다
       평균속도 2~60km/h         — 기록 오류(지연 하차 처리 등) 제거
 
     반환 컬럼: origin, dest(표준형 동명), minutes, km, kmh, hour, period, is_weekend
     """
-    path = Path(path) if path else DATA_DIR / "calltaxi_2025_merged.csv"
+    path = Path(path) if path else DATA_DIR / CALLS_FILE
     df = pd.read_csv(path, encoding="utf-8-sig", usecols=_RIDE_COLS, low_memory=False)
     funnel = {"원본": len(df)}
 
@@ -427,7 +429,7 @@ class TravelTime:
     def build(cls, *, use_cache: bool = True, calls_path: Path = None,
               centroid_path: Path = None) -> "TravelTime":
         """테이블 3종을 캐시에서 읽거나(없으면) 원본에서 만들어 저장한다."""
-        src = Path(calls_path) if calls_path else DATA_DIR / "calltaxi_2025_merged.csv"
+        src = Path(calls_path) if calls_path else DATA_DIR / CALLS_FILE
         paths = _cache_paths(src)
         centroids = load_centroids(centroid_path)
 

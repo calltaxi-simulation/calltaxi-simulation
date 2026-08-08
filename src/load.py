@@ -26,6 +26,15 @@ import pandas as pd
 # 저장소 상위의 data/ — clone 위치가 어디든 이 파일 기준으로 잡힌다.
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
+# 콜 원본 — 특장차 한정본(1,390,969행). 원본 명세에서 흡수한 사실은
+# docs/calibration.md 첫 절("원본 명세에서 흡수한 사실").
+#
+# 구 `calltaxi_2025_merged.csv`(172.9만 행)를 대체한다. 저쪽은 특장차 + 임차택시가
+# 섞여 있었는데, 임차택시는 차고지 기반 교대 운영이 아니라 거점 배치의 영향을
+# 받지 않아 시뮬 모집단에서 뺀다(A-16). 파일명 상수를 한 곳에 두어
+# load / travel_time / idle 이 같은 원본을 보게 한다.
+CALLS_FILE = "calls_2025_replay.csv"
+
 
 def resolve_data_dir() -> Path:
     """데이터 폴더 결정. 환경변수 DATA_DIR 이 있으면 그쪽, 없으면 ../data/.
@@ -176,8 +185,14 @@ def load_calls(path: Path = None, *, require_seoul_dest: bool = False,
     - 대기시간 = 승차 − 접수 계산
     - 출발동·목적동에 중심좌표를 붙인다(좌표를 못 찾는 출발동은 제외)
 
-    원본 173만 행 중 즉시콜 88.3%, 서울 출발이 그 대부분이다.
+    원본은 특장차 한정본 1,390,969행(A-16). 즉시콜 88.0%, 서울 출발이 그 대부분이라
+    필터를 통과하는 건 1,222,330건이다.
     결과는 cache/calls_*.parquet 에 저장하고 원본 mtime·크기가 같으면 재사용한다.
+
+    **`is_canceled` 는 승차 기록의 유무다** — 정산 미기록 616건(승차·취소 없이 하차만
+    있는 건 — calibration.md 흡수 사실 ⑵)이 여기 함께 잡힌다. 운행은 이루어졌지만 승차 시각이 없어
+    대기시간을 산출할 수 없고, 취소가 아니므로 별도 플래그 `is_unsettled` 로 갈라둔다.
+    취소 4구간(metrics.cancel_kind)은 이 건들을 'unsettled' 로 따로 뺀다.
 
     반환 컬럼(원천 한글 → 영문):
       접수/예정/배차/승차/하차/취소일시 → received_at ... canceled_at
@@ -185,9 +200,9 @@ def load_calls(path: Path = None, *, require_seoul_dest: bool = False,
       목적구·목적동 → dest_gu, dest_dong      (+ _canon, _lat, _lon)
       요금·승차거리·차량구분·장애유형·이용목적 → fare, ride_distance_m, ...
       파생: wait_min(승차−접수), assign_min(배차−접수), ride_min(하차−승차),
-            is_canceled, date, hour, weekday, period
+            is_canceled, is_unsettled, date, hour, weekday, period
     """
-    path = Path(path) if path else DATA_DIR / "서울시설공단_장애인콜택시 탑승내역_20251231.csv"
+    path = Path(path) if path else DATA_DIR / CALLS_FILE
     cache = _cache_path(path, require_seoul_dest)
 
     if use_cache and cache.exists():
@@ -246,7 +261,13 @@ def _prepare_chunk(chunk: pd.DataFrame, lookup: pd.DataFrame,
     df["wait_min"] = (df["boarded_at"] - df["received_at"]).dt.total_seconds() / 60
     df["assign_min"] = (df["assigned_at"] - df["received_at"]).dt.total_seconds() / 60
     df["ride_min"] = (df["alighted_at"] - df["boarded_at"]).dt.total_seconds() / 60
-    df["is_canceled"] = df["boarded_at"].isna()
+
+    # 정산 미기록(calibration.md 흡수 사실 ⑵) — 승차·취소가 없는데 하차만 있는 건. 배차→하차 중앙
+    # 56.6분으로 운행은 이루어졌다. 승차 시각이 없어 대기시간을 낼 수 없지만
+    # 취소도 아니다. 섞어두면 취소율이 0.04%p 부풀고 '배차 후 취소'에 얹힌다.
+    df["is_unsettled"] = (df["boarded_at"].isna() & df["canceled_at"].isna()
+                          & df["alighted_at"].notna())
+    df["is_canceled"] = df["boarded_at"].isna() & ~df["is_unsettled"]
 
     # 음수·비현실 대기는 기록 오류로 보고 결측 처리(행은 남긴다 — 취소율 분모 유지)
     bad = (df["wait_min"] < 0) | (df["wait_min"] > MAX_WAIT_MIN)
@@ -310,11 +331,20 @@ def _shrink(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# 캐시 스키마 판. 파생 컬럼이나 필터 정의를 손대면 올린다 — 원본이 그대로여도
+# 옛 parquet 을 계속 읽어 컬럼이 비는 사고를 막는다(is_unsettled 추가 때 겪었다).
+CACHE_SCHEMA = 2
+
+
 def _cache_path(src: Path, require_seoul_dest: bool) -> Path:
-    """원본 mtime·크기를 파일명에 박아 원본이 바뀌면 캐시가 자동으로 빗나가게 한다."""
+    """원본 mtime·크기 + 스키마 판을 파일명에 박는다.
+
+    원본이 바뀌거나 파생 컬럼 구성이 바뀌면 캐시가 자동으로 빗나간다.
+    """
     st = src.stat()
     tag = "od" if require_seoul_dest else "o"
-    return CACHE_DIR / f"calls_{tag}_{int(st.st_mtime)}_{st.st_size}.parquet"
+    return (CACHE_DIR /
+            f"calls_{tag}_v{CACHE_SCHEMA}_{int(st.st_mtime)}_{st.st_size}.parquet")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -438,7 +468,7 @@ def load_candidates(path: Path = None, *, outdoor_only: bool = True,
     공영·시영 원본 목록을 직접 읽던 방식을 대체한다. v4 풀은 공영·시영에 더해
     KOTSA 주차장을 UPIS 도시계획시설 폴리곤과 공간조인해 공공성을 판정하고,
     건축물대장으로 민간·기계식을 걸러낸 결과다. 만들어진 과정은
-    docs/sim-pool.pipeline.v4.md 참조.
+    docs/calibration.md 의 흡수 사실 ⑷ 참조.
 
     **기본은 옥외 348곳 24,392면만 돌려준다(A-15).** 리프트 특장차(전고 2.6m)가
     들어갈 수 있어야 거점이 되는데, 주차장 진입 유효고를 주는 소스가 없어
@@ -571,7 +601,7 @@ def load_disabled_population(path: Path = None) -> pd.DataFrame:
     return out[cols].reset_index(drop=True)
 
 
-_VEHICLE_COLS = ["차량번호", "승차일시", "하차일시", "승차거리"]
+_VEHICLE_COLS = ["차량번호", "접수일시", "승차일시", "하차일시", "승차거리"]
 
 
 def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
@@ -582,19 +612,31 @@ def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
     여기서는 서울 밖 운행도 차량이 묶여 있던 시간이라 구를 가리지 않는다.
 
     필터: 승차·하차 시각이 모두 기록된 완료 건, 운행시간 1~120분, 차량번호 있음.
-    차량번호가 비어 있는 건(원본 병합이 차량을 못 붙인 건)은 차량-일 집계의 키가
-    없어 뺀다. 제외 건수는 attrs['n_no_vehicle'] 에 남긴다 — groupby 가 조용히
-    떨어뜨리게 두지 않으려는 것이다.
+    차량번호가 비어 있는 건(미탑승 건 — 원본이 완료 운행에만 차량을 붙인다)은
+    차량-일 집계의 키가 없어 뺀다. 제외 건수는 attrs['n_no_vehicle'] 에 남긴다 —
+    groupby 가 조용히 떨어뜨리게 두지 않으려는 것이다.
 
-    차량번호는 877개다. 차고지 정원 합 691대보다 많은데, 1년치라 중간에
-    교체·증차된 차량이 모두 잡히기 때문이다. 특정 시점의 가동 대수가 아니다.
+    **정산 미기록 616건(calibration.md 흡수 사실 ⑵)은 여기에 들어오지 않는다.** 승차 시각이 없어
+    필터에 걸리고, 애초에 차량번호도 없어 어느 차량의 하루였는지 알 수 없다.
+    배차→하차 중앙 56.6분만큼 차량이 묶여 있었지만 귀속시킬 차량이 없다.
+
+    차량번호는 723개다(특장차 한정본 · A-16). 차고지 정원 합 691대보다 많은데,
+    1년치라 중간에 교체·증차된 차량이 모두 잡히기 때문이다. 특정 시점의 가동
+    대수가 아니다 — **일별 가동은 중앙 561대(범위 246~626)로, 시뮬 차량 수는
+    723이 아니라 이쪽을 써야 한다(calibration.md 흡수 사실 ⑶).**
 
     service_date 는 승차 시각 기준이라 자정을 넘긴 운행은 다음 날로 넘어간다.
-    심야 비중이 1.7%라 하루 단위 집계에는 영향이 거의 없다.
+    심야 비중이 1.7%라 근무 길이 집계에는 영향이 거의 없다.
 
-    반환 컬럼: vehicle_id, service_date, boarded_at, alighted_at, ride_min, km
+    **가동 대수를 셀 때는 request_date(접수일 기준)를 쓴다.** 자정 직전 접수 →
+    자정 직후 승차인 건이 승차일 기준에서는 다음 날의 '가동'으로 넘어가, 그 차량이
+    실제로 근무한 날과 어긋난다. 접수일 기준 중앙 561대 · 승차일 기준 540대로
+    20대가 갈린다. calibration.md 흡수 사실 ⑶ 의 561 은 접수일 기준이다.
+
+    반환 컬럼: vehicle_id, service_date, request_date, boarded_at, alighted_at,
+              ride_min, km
     """
-    path = Path(path) if path else DATA_DIR / "calltaxi_2025_merged.csv"
+    path = Path(path) if path else DATA_DIR / CALLS_FILE
     df = pd.read_csv(path, encoding="utf-8-sig", usecols=_VEHICLE_COLS, low_memory=False)
     n_raw = len(df)
 
@@ -612,14 +654,20 @@ def load_vehicle_trips(path: Path = None) -> pd.DataFrame:
         df[has_vehicle], board[has_vehicle], alight[has_vehicle],
         ride_min[has_vehicle], vehicle[has_vehicle])
 
+    received = pd.to_datetime(df["접수일시"], format="ISO8601", errors="coerce")
+
     out = pd.DataFrame({
         "vehicle_id": vehicle.astype("int64").to_numpy(),
         "service_date": board.dt.normalize().to_numpy(),
+        "request_date": received.dt.normalize().to_numpy(),
         "boarded_at": board.to_numpy(),
         "alighted_at": alight.to_numpy(),
         "ride_min": ride_min.astype("float32").to_numpy(),
-        "km": (pd.to_numeric(df["승차거리"], errors="coerce") / 1000)
-              .astype("float32").to_numpy(),
+        # 승차거리 0 은 결측 대체값이다(calibration.md 흡수 사실 ⑴). 완료 건에도 4,636건 섞여 있고
+        # 요금·운행시간은 정상이라 미터기·GPS 미기록으로 보인다. 0 을 그대로 두면
+        # 평균이 눌리므로 NaN 으로 돌린다 — 행은 남긴다(운행 자체는 있었다).
+        "km": (pd.to_numeric(df["승차거리"], errors="coerce")
+                 .replace(0, np.nan) / 1000).astype("float32").to_numpy(),
     })
     out.attrs["n_raw"] = n_raw
     out.attrs["n_no_vehicle"] = n_no_vehicle
@@ -693,7 +741,8 @@ if __name__ == "__main__":
     n_raw = calls.attrs.get("n_raw")
     print(f"콜             {len(calls):>10,}건" + (f"  (원본 {n_raw:,}행)" if n_raw else "  (캐시)"))
     print(f"  기간         {calls['date'].min():%Y-%m-%d} ~ {calls['date'].max():%Y-%m-%d}")
-    print(f"  취소율       {calls['is_canceled'].mean():.1%}")
+    print(f"  취소율       {calls['is_canceled'].mean():.2%}"
+          f"  (정산 미기록 {int(calls['is_unsettled'].sum()):,}건 제외)")
     print(f"  목적지 서울  {calls['dest_in_seoul'].mean():.1%}")
     print(f"  출발동 매칭  {calls['origin_match'].value_counts().to_dict()}")
     n_dest_gap = int(calls["dest_lat"].isna().sum())
@@ -703,4 +752,4 @@ if __name__ == "__main__":
     w = calls["wait_min"].dropna()
     print(f"\n대기시간(분)   평균 {w.mean():.1f} / 중앙값 {w.median():.1f} / "
           f"p90 {w.quantile(.9):.1f} / 60분초과 {(w > 60).mean():.1%}")
-    print("검증 기준      평균 39.3 / 중앙값 30.8 / p90 77.2 / 60분초과 17.9%")
+    print("검증 기준      평균 40.8 / 중앙값 32.0 / p90 80.4 / 60분초과 19.2%")

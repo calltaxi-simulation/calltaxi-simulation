@@ -80,7 +80,12 @@ PERIOD_ORDER = ["심야", "아침", "낮", "저녁"]
 # 백분위는 무엇을 넣든 항상 상위 25%가 빨강이라 개선이 드러나지 않는다.
 # 진단과 시뮬을 같은 기준으로 읽으려면 절대값이어야 한다.
 # 나머지는 근거 있는 절대 임계가 없어 상위 25%(공급 지표는 하위 25%)를 쓴다.
-# 45분이 마침 평균 대기의 p75(45.5분)라 네 지표가 같은 논리로 정렬된다.
+#
+# ⚠ 45분과 p75 의 일치는 깨졌다(특장차 한정 모집단 · A-16). 구 모집단에서는 45분이
+# 마침 p75(45.5분)라 네 지표가 같은 논리로 정렬됐는데, 지금은 p75 = 46.80분이고
+# 45분은 p67.3 지점이다. 평균 대기만 빨강이 137개(32.7%)로 다른 셋(105개 · 25.1%)보다
+# 넓다. 그래도 절대값을 유지하는 이유는 위 문단 그대로다 — 일치는 편의였지 근거가
+# 아니었다. 좁히려면 RED_THRESHOLD_MIN 만 바꾸되 진단과 시뮬의 자가 달라진다.
 #
 # 이용률은 넣지 않는다. 낮은 이용률이 미충족 수요인지 낮은 수요인지 자료로
 # 가릴 수 없어 방향을 정할 수 없다. 방향을 임의로 정하면 도구가 답을 내는 게
@@ -150,8 +155,38 @@ def load_depots() -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_candidates() -> pd.DataFrame:
-    """거점 후보 — 옥외 348곳(A-15). 옥내·혼합은 진입 유효고를 확인할 수 없어 뺀다."""
-    return load.load_candidates()
+    """지도에 올릴 후보 — **동에 실제로 배정된 곳만**.
+
+    옥외 후보는 348곳이지만 시뮬이 쓰는 건 `candidates.assign_dong_candidates` 가
+    동에 배정한 244곳이다. 348곳을 다 찍으면 **지도가 시뮬 입력과 다른 것을 보여준다**
+    — 실무자는 점 하나하나를 "여기에 놓을 수 있다"로 읽는데, 배정되지 않은 104곳은
+    어느 동의 거점도 되지 않는다.
+
+    한 후보가 여러 동에 배정될 수 있어(대체 배정) 배정 동 목록을 함께 붙인다.
+    `dong_candidates.csv` 가 없으면 348곳 전체로 물러난다 — 지도가 비는 것보다 낫다.
+
+    반환: load.load_candidates() 컬럼 + assigned_dongs(문자열), n_assigned_dongs
+    """
+    cand = load.load_candidates()
+    path = OUTPUTS / "dong_candidates.csv"
+    if not path.exists():
+        cand = cand.assign(assigned_dongs="", n_assigned_dongs=0)
+        cand.attrs["n_outdoor"] = len(cand)
+        cand.attrs["assigned_only"] = False
+        return cand
+
+    a = pd.read_csv(path)
+    a = a[a["is_assigned"] & a["cand_id"].notna()]
+    per = (a.assign(label=a["gu"] + " " + a["dong_canon"])
+            .groupby("cand_id")["label"]
+            .agg(assigned_dongs=lambda s: " · ".join(sorted(s)),
+                 n_assigned_dongs="size"))
+
+    n_outdoor = len(cand)
+    out = cand.merge(per, left_on="cand_id", right_index=True, how="inner")
+    out.attrs["n_outdoor"] = n_outdoor
+    out.attrs["assigned_only"] = True
+    return out.reset_index(drop=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -404,16 +439,17 @@ def build_map(poly: pd.DataFrame, selected, show_depots: bool,
         # 코로플레스 점은 location 을 갖고 이 태그가 없다.
         # 실가용은 시영에만 있다 — 없는 건 -1 로 넘겨 패널에서 행을 뺀다
         # (None 을 섞으면 plotly customdata 가 문자열로 눌린다).
-        cdata = [[CAND_TAG, n, int(c), s, g, -1 if pd.isna(a) else int(a)]
-                 for n, c, s, g, a in zip(
+        cdata = [[CAND_TAG, n, int(c), s, g, -1 if pd.isna(a) else int(a), d]
+                 for n, c, s, g, a, d in zip(
                      cand["name"], cand["capacity"], cand["source"], cand["gu"],
-                     cand["capacity_available"])]
+                     cand["capacity_available"], cand["assigned_dongs"])]
         fig.add_trace(go.Scattermap(
             lat=cand["lat"], lon=cand["lon"], mode="markers",
             marker=dict(size=7, color=CAND_COLOR),
             customdata=cdata,
             hovertemplate=("%{customdata[1]}<br>%{customdata[2]:,}면 · "
-                           "%{customdata[3]} · %{customdata[4]}<extra></extra>"),
+                           "%{customdata[3]} · %{customdata[4]}"
+                           "<br>배정: %{customdata[6]}<extra></extra>"),
             name="후보 주차장",
         ))
 
@@ -472,14 +508,22 @@ def note_html(text: str) -> str:
 def cand_panel(cd: list) -> None:
     """클릭한 후보 주차장.
 
-    cd 는 지도 customdata — [태그, 이름, 면수, 소스, 자치구, 실가용면수(없으면 -1)].
+    cd 는 지도 customdata —
+    [태그, 이름, 면수, 소스, 자치구, 실가용면수(없으면 -1), 배정 동].
 
     **면수가 시뮬 입력이고 실가용은 참고값이다.** 실측 잔여면은 시영 65곳에만
     있어서 그것을 용량으로 쓰면 후보 간 비교에서 자가 섞인다. 시영일 때만
     한 줄 더 붙여 "총 면수만 보면 안 된다"를 화면에서 알 수 있게 한다.
+
+    **배정 동을 함께 보인다.** 후보 하나가 여러 동의 거점이 될 수 있고(대체 배정),
+    그 경우 이 한 자리에 배치하면 여러 동이 같이 움직인다 — 클릭했을 때 그
+    사실이 보여야 후보의 무게를 읽을 수 있다.
     """
-    _, name, capacity, source, gu, available = cd
+    _, name, capacity, source, gu, available, dongs = cd
     rows = [("면수", f"{int(capacity):,}면"), ("소스", source), ("자치구", gu)]
+    if dongs:
+        n = dongs.count("·") + 1
+        rows.append((f"배정 동 ({n})", dongs))
     note = "옥외 후보입니다. 시뮬 입력 용량은 이 총 면수입니다."
     if available >= 0:
         rows.insert(1, ("실가용 면수 (참고)", f"{int(available):,}면"))
@@ -757,17 +801,26 @@ def sidebar(poly: pd.DataFrame) -> None:
     sb.markdown('<div class="map-title">레이어</div>', unsafe_allow_html=True)
     sb.toggle("차고지 (현행 44개)", key="show_depots")
     cand = load_candidates()
-    sb.toggle(f"후보 주차장 (옥외 {len(cand)}곳)", key="show_cands")
+    sb.toggle(f"후보 주차장 (배정된 {len(cand)}곳)", key="show_cands")
     sb.markdown(
         f'<div class="legend">'
         f'<span class="swatch" style="background:{DEPOT_COLOR}"></span>현행 차고지<br>'
         f'<span class="swatch" style="background:{CAND_COLOR}"></span>후보 주차장'
         f'</div>', unsafe_allow_html=True)
+    n_outdoor = cand.attrs.get("n_outdoor", len(cand))
+    assigned_note = (
+        f"옥외 후보 {n_outdoor}곳 중 <b>동에 배정된 {len(cand)}곳</b>만 찍습니다 — "
+        "나머지는 어느 동의 거점도 되지 않아 시뮬에 들어가지 않습니다. "
+        "점을 클릭하면 어느 동에 배정됐는지 나옵니다(한 곳이 여러 동을 맡기도 합니다). "
+        if cand.attrs.get("assigned_only") else
+        "<b>배정 결과 파일이 없어 옥외 후보 전체</b>를 찍습니다 — "
+        "<code>python src/candidates.py</code> 를 돌리면 배정된 곳만 남습니다. ")
     sb.markdown(note_html(
-        f"후보 풀 {cand.attrs['n_pool']}곳 중 <b>옥외 {len(cand)}곳</b>만 씁니다. "
-        f"옥내·혼합 {cand.attrs['n_excluded_indoor_mixed']}곳은 주차장 진입 "
+        assigned_note +
+        f"후보 풀 {cand.attrs['n_pool']}곳 중 옥외만 쓰는 이유는, "
+        f"옥내·혼합 {cand.attrs['n_excluded_indoor_mixed']}곳이 주차장 진입 "
         "유효고를 확인할 소스가 없어 리프트 특장차가 들어갈 수 있는지 "
-        "판정할 수 없습니다(가정 A-15). 목록은 보존돼 있어 전고를 확인하면 "
+        "판정할 수 없기 때문입니다(가정 A-15). 목록은 보존돼 있어 전고를 확인하면 "
         "그대로 되살릴 수 있습니다."), unsafe_allow_html=True)
 
     sb.divider()
@@ -949,7 +1002,7 @@ def render_sim_page() -> None:
         '보는 화면입니다. 시뮬 엔진(<code>simulator.py</code>)이 아직 미구현입니다.</div>'
         + note_html(
             "이 화면만 <b>대표 기간</b> 기준이 됩니다. 나머지 화면은 2025년 연간 "
-            "기준입니다. 대표 기간은 연간 평균 대기(39.3분)와 가장 가까운 구간으로 "
+            "기준입니다. 대표 기간은 연간 평균 대기(40.8분)와 가장 가까운 구간으로 "
             "고르며, 결과를 보기 전에 고정합니다(가정 A-03).")
         + '</div>', unsafe_allow_html=True)
     if st.button("← 지도로"):

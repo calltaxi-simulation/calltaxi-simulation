@@ -222,12 +222,32 @@ def test_calls_wait_time_sane(calls):
 
 @pytest.mark.slow
 def test_calls_reproduce_observed_targets(calls):
-    """검증 기준이 실측에서 재현되는지 — 필터 정의가 맞는지 확인."""
+    """검증 기준이 실측에서 재현되는지 — 필터 정의가 맞는지 확인.
+
+    특장차 한정본 기준이다(A-16). 임차택시를 섞으면 39.3 / 30.8 / 77.2 / 17.9% 로
+    내려간다 — 취소율 4.8%의 다른 운영 체계가 평균을 끌어내린 값이다.
+    """
+    assert len(calls) == 1_222_330
     w = calls["wait_min"].dropna()
-    assert w.mean() == pytest.approx(39.3, abs=0.3)
-    assert w.median() == pytest.approx(30.8, abs=0.3)
-    assert w.quantile(0.90) == pytest.approx(77.2, abs=0.5)
-    assert (w > 60).mean() == pytest.approx(0.179, abs=0.005)
+    assert w.mean() == pytest.approx(40.8, abs=0.3)
+    assert w.median() == pytest.approx(32.0, abs=0.3)
+    assert w.quantile(0.90) == pytest.approx(80.4, abs=0.5)
+    assert (w > 60).mean() == pytest.approx(0.192, abs=0.005)
+
+
+@pytest.mark.slow
+def test_unsettled_is_not_canceled(calls):
+    """정산 미기록(명세 1-5) — 승차·취소 없이 하차만 있는 건은 취소가 아니다."""
+    u = calls["is_unsettled"]
+    assert u.sum() == 524
+    assert calls.loc[u, "boarded_at"].isna().all()
+    assert calls.loc[u, "canceled_at"].isna().all()
+    assert calls.loc[u, "alighted_at"].notna().all()
+    assert calls.loc[u, "assigned_at"].notna().all(), "배차는 전부 기록돼 있다"
+    assert not calls.loc[u, "is_canceled"].any()
+    # 섞으면 취소율이 15.44% → 15.48% 로 부푼다
+    assert calls["is_canceled"].mean() == pytest.approx(0.1544, abs=0.0005)
+    assert calls["boarded_at"].isna().mean() == pytest.approx(0.1548, abs=0.0005)
 
 
 @pytest.mark.slow

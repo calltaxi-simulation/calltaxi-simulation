@@ -33,22 +33,27 @@ from travel_time import RIDE_MIN_RANGE, SPEED_RANGE, haversine_km
 # 검증 기준 · 상수
 # ─────────────────────────────────────────────────────────────
 
-# 검증 기준(현행 배치 재현 목표)
+# 검증 기준(현행 배치 재현 목표) — **특장차 한정 모집단**(A-16).
 #
 # 분모가 지표마다 다르다 — 대조할 때 헷갈리기 쉬우니 명시해 둔다.
-#   대기시간 4개 : 승차 완료 건 1,323,620 (취소 건은 wait=NaN 이라 자동 제외)
-#   취소율       : 시뮬 입력 모수 1,527,213 (즉시콜+서울 전체)
+#   대기시간 4개 : 승차 완료 건 1,033,135 (취소 건은 wait=NaN 이라 자동 제외)
+#   취소율       : 시뮬 입력 모수 1,222,330 (즉시콜+서울 전체)
 #   지역 지니    : 100건 이상 동 430개 (A-12), 동 균등가중
 #
-# cancel_ratio 는 원래 0.142 였으나 그 값은 필터 이전 원본 전체(1,729,476)를
-# 분모로 쓴 것이라 다른 지표와 모수가 어긋났다. 시뮬 입력 모수 기준 13.3% 로 정정.
+# 임차택시를 뺀 값이다. 구 기준(전체 152.7만)은 39.3 / 30.8 / 77.2 / 17.9% /
+# 13.3% / 0.0947 이었다 — 취소율이 4.8%에 불과한 임차택시가 빠지면서 대기·취소가
+# 함께 올라갔다. 근거는 A-16(docs/assa_log.md).
+#
+# cancel_ratio 의 분자에서 정산 미기록(is_unsettled — calibration.md 흡수 사실 ⑵)은 뺀다. 승차
+# 기록이 없어 취소처럼 보이지만 배차→하차 구간이 실재해 운행은 이루어진 건이다.
+# 넣으면 15.48%, 빼면 15.44% — 원 산출과 맞는 쪽은 후자다.
 TARGETS = {
-    "mean_wait": 39.3,
-    "median_wait": 30.8,
-    "p90_wait": 77.2,
-    "long_wait_ratio": 0.179,   # 60분 초과
-    "cancel_ratio": 0.133,      # 정정(구 0.142) — 위 주석 참조
-    "gini_dong": 0.095,
+    "mean_wait": 40.8,
+    "median_wait": 32.0,
+    "p90_wait": 80.4,
+    "long_wait_ratio": 0.192,   # 60분 초과
+    "cancel_ratio": 0.154,
+    "gini_dong": 0.092,
 }
 
 # 판정 허용오차. 대기시간은 분, 비율은 절대비율.
@@ -119,27 +124,53 @@ def ride_kmh(calls: pd.DataFrame) -> pd.Series:
 def ride_valid(calls: pd.DataFrame) -> pd.Series:
     """차내 지표에 쓸 만한 운행인지. travel_time 의 이상치 컷과 같은 기준이다.
 
-    운행시간 1~120분 · 거리 > 0 · 속도 2~60km/h. 하차 미기록(86건)과
-    거리 0(대기시간만 남고 운행이 없는 건)이 여기서 걸린다.
+    운행시간 1~120분 · 거리 > 0 · 속도 2~60km/h.
+
+    **거리 > 0 이 calibration.md 흡수 사실 ⑴ 의 함정을 막는 컷이다.** 승차거리 0 은 결측 대체값이라
+    미탑승 건뿐 아니라 완료 건 4,636건에도 섞여 있다(미터기·GPS 미기록. 요금은
+    정상). 정상 완료 건의 중앙이 5,578m 인데 0 을 섞으면 거리·속도 평균이 눌린다.
+    정산 미기록 건(calibration.md 흡수 사실 ⑵)도 승차 시각이 없어 ride_min 이 NaN 이라 여기서 걸린다.
     """
     return (calls["ride_min"].between(*RIDE_MIN_RANGE)
             & (calls["ride_distance_m"] > 0)
             & ride_kmh(calls).between(*SPEED_RANGE))
 
 
+def is_unsettled(calls: pd.DataFrame) -> pd.Series:
+    """정산 미기록 — 승차·취소가 없는데 하차만 있는 건(calibration.md 흡수 사실 ⑵, 필터 후 524건).
+
+    배차→하차 중앙 56.6분이라 운행은 이루어졌다. 요금·거리는 0으로 남지 않았다.
+    **취소가 아니다** — 미이행 집계에서 빼고, 요금·거리 집계에서도 뺀다.
+    승차 시각이 없어 대기시간은 애초에 산출되지 않는다(wait_min=NaN).
+
+    load.load_calls 가 같은 규칙으로 `is_unsettled` 컬럼을 붙여두지만, 이 모듈의
+    함수들은 시뮬 로그도 받으므로 컬럼에 기대지 않고 여기서 다시 판정한다.
+    """
+    canceled_at = pd.to_datetime(calls["canceled_at"], errors="coerce")
+    return (calls["boarded_at"].isna() & canceled_at.isna()
+            & calls["alighted_at"].notna())
+
+
+def is_canceled(calls: pd.DataFrame) -> pd.Series:
+    """미이행 판정. 승차 기록이 없고 정산 미기록도 아닌 건."""
+    return calls["boarded_at"].isna() & ~is_unsettled(calls)
+
+
 def cancel_kind(calls: pd.DataFrame) -> pd.Series:
-    """미이행 4구간 분류. 승차한 건은 NaN.
+    """미이행 4구간 분류. 승차한 건과 정산 미기록 건은 NaN.
 
       immediate    배차 전 + 접수 후 1분 이내 취소 — 오입력·변심
       abandoned    배차 전 + 1분 초과 — **기다리다 포기. 공급 부족의 핵심 신호**
       after_assign 배차는 됐는데 승차 기록이 없음 — 차가 오다 어긋난 건
       other        배차 전 취소 중 취소 시각이 결측이라 즉시/포기를 판별할 수 없는
-                   건(24건). 근거 없는 분류를 피해 별도 구간으로 둔다.
+                   건. 근거 없는 분류를 피해 별도 구간으로 둔다.
+                   특장차 한정본에서는 0건이다(정제 단계에서 걸러졌다).
 
-
-    취소 시각이 접수보다 앞선 기록이 4건 있는데 immediate 로 들어간다(오차 무시).
+    정산 미기록(is_unsettled)은 배차·하차만 있어 그냥 두면 after_assign 으로
+    들어간다. 운행이 이루어진 건이라 미이행이 아니므로 앞에서 뺀다 — 안 빼면
+    취소율이 15.44% → 15.48%, 배차 후 취소가 3.74% → 3.78% 로 부푼다.
     """
-    canceled = calls["boarded_at"].isna()
+    canceled = is_canceled(calls)
     assigned = calls["assigned_at"].notna()
     # 취소가 한 건도 없는 로그(시뮬 결과 등)는 canceled_at 이 전부 결측이라 datetime
     # 으로 안 잡힌다. 실측 datetime64 에는 사실상 무비용이라 그냥 한 번 통과시킨다.
@@ -234,8 +265,11 @@ def dong_cancel(calls: pd.DataFrame, *, keys=DONG_KEYS) -> pd.DataFrame:
                            '미이행된 콜이 왜 미이행됐나'
 
     ratio 4개의 합 = cancel_ratio, share 4개의 합 = 1 로 정확히 맞는다.
-    **검증 채점과 전체 취소율 13.3%는 ratio(콜 대비) 기준이다.** share 는 해석용
+    **검증 채점과 전체 취소율 15.44%는 ratio(콜 대비) 기준이다.** share 는 해석용
     보조 지표라 분모를 바꾸지 않는다.
+
+    ratio 의 분모(n_calls)에는 정산 미기록 건이 남아 있다 — 접수된 콜인 것은
+    맞아서다. 분자에서만 빠진다.
 
     취소가 한 건도 없는 동은 share 가 NaN 이다(0/0). 0으로 채우면 '전부 즉시
     취소였다'와 구분이 안 된다.
@@ -524,14 +558,49 @@ def vehicle_day_table(trips: pd.DataFrame) -> pd.DataFrame:
     조별 출차 시각·근무 길이를 실측에서 역추정하는 데 쓴다(A-09 —
     docs/model_flow.md 조 편성 절).
 
-    반환 컬럼: vehicle_id, service_date, trips, occupied_min, span_h
+    first_board 는 조별 출차 시각의 대리값이라 그대로 돌려준다 — A-09 의 출차
+    분포를 이 컬럼의 시(hour)에서 뽑는다.
+
+    반환 컬럼: vehicle_id, service_date, trips, occupied_min, first_board, span_h
     """
     g = trips.groupby(["vehicle_id", "service_date"])
     out = g.agg(trips=("ride_min", "size"), occupied_min=("ride_min", "sum"),
                 first_board=("boarded_at", "min"), last_alight=("alighted_at", "max"))
     out["span_h"] = (out["last_alight"] - out["first_board"]).dt.total_seconds() / 3600
     return out.reset_index()[["vehicle_id", "service_date", "trips",
-                              "occupied_min", "span_h"]]
+                              "occupied_min", "first_board", "span_h"]]
+
+
+def daily_active_vehicles(trips: pd.DataFrame, *,
+                          date_col: str = "request_date") -> pd.Series:
+    """일별 가동 차량 수. **시뮬에 넣을 차량 대수의 실측 기준이다.**
+
+    원본의 고유 차량번호 723대는 **연간 누적**이라 그대로 넣으면 공급이 과대해진다
+    (calibration.md 흡수 사실 ⑶). 교체·증차분이 전부 잡히고, 정비·휴차로 그날 안 나온 차도 포함된다.
+
+    실측은 접수일 기준 **중앙 561대(범위 246~626)** 지만 **하나의 값으로 접으면
+    안 된다** — 평일 중앙 574대 · 주말 중앙 374대로 1.5배 갈린다. 시뮬은
+    `SIM_FLEET` 처럼 **요일별로 다른 대수를 넣는다**(결정 2026.08.08). 연간 중앙
+    561을 평일에 쓰면 공급이 과소해져 대기가 과대 재현되고, 검증에서 원인이 배차
+    로직인지 차량 수인지 갈리지 않는다.
+
+    date_col 기본값은 request_date(접수일)다. 승차일 기준으로 세면 자정을 넘긴
+    운행 때문에 중앙 540대로 20대가 낮게 나온다 — 명세의 561 과 대조하려면
+    접수일 기준이어야 한다.
+    """
+    return trips.groupby(date_col)["vehicle_id"].nunique()
+
+
+# 시뮬에 넣을 차량 대수 — **요일별로 다르게 적용한다**(결정 2026.08.08).
+#
+# 연간 중앙 561대를 평일에 쓰면 공급이 과소해져 대기가 과대 재현되고, 대표 기간이
+# 평일 중심이라 그 왜곡이 그대로 검증에 들어간다. 그러면 재현 실패의 원인이 배차
+# 로직인지 차량 수인지 구분되지 않는다.
+#
+# 값은 daily_active_vehicles() 의 요일별 중앙값이다. 원본에서 운행시간 1~120분 컷
+# 없이 세면 평일이 575대로 1대 높다 — 그 컷은 조 편성 분석용이라 가동 여부 판정에는
+# 과하지만, 한 함수에서 나온 값으로 통일하는 쪽을 택했다.
+SIM_FLEET = {"weekday": 574, "weekend": 374}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -568,15 +637,17 @@ def dong_wait_table(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
 
 def dong_gini(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
               weighted: bool = False, **kw) -> float:
-    """동간 대기시간 지니(**동 균등가중**). 검증 기준 0.095.
+    """동간 대기시간 지니(**동 균등가중**). 검증 기준 0.092.
 
     형평을 '동 간 격차'로 정의하므로 각 동을 한 표로 세는 균등가중이 정본이다.
     콜수로 가중하면 콜이 많은 동이 지표를 지배해 정작 소외된 동의 격차가 묻힌다.
-    원본 산출물(서울즉시콜_동별_대기격차.csv)로 역산한 타깃 0.095 도 균등가중 값
-    (0.0947)이라 정의와 실측이 맞아떨어진다.
+    특장차 한정(A-16) 실측은 균등가중 **0.0924**다.
 
-    weighted=True 로 콜수 가중(0.1013)도 뽑을 수 있게 남겨뒀다 — 참고용이며
+    weighted=True 로 콜수 가중(0.0986)도 뽑을 수 있게 남겨뒀다 — 참고용이며
     검증 채점에는 쓰지 않는다.
+
+    **모집단이 19.5% 줄어도 지니는 0.0947 → 0.0924 로 거의 안 움직인다.** 동 간 격차
+    구조는 두 차종에서 같다는 뜻이고, 그래서 이 지표는 모집단 교체에 둔감하다.
     """
     tbl = dong_wait_table(log, min_calls=min_calls, **kw)
     return gini(tbl["mean_wait"], weights=tbl["n_calls"] if weighted else None)
@@ -628,7 +699,7 @@ def overall_metrics(calls: pd.DataFrame) -> dict:
         "median_wait": float(w.median()),
         "p90_wait": float(w.quantile(0.90)),
         "long_wait_ratio": float((w > LONG_WAIT_MIN).mean()),
-        "cancel_ratio": float(calls["boarded_at"].isna().mean()),
+        "cancel_ratio": float(is_canceled(calls).mean()),
         "gini_dong": dong_gini(calls),
     }
 
@@ -639,7 +710,7 @@ def cancel_breakdown(calls: pd.DataFrame) -> pd.DataFrame:
     동별 표를 평균 낸 게 아니라 건수를 그대로 합친 값이다. 동 균등가중 평균과는
     다르니 인용할 때 어느 쪽 기준인지 밝힐 것 — 콜이 많은 동이 여기서는 더 무겁다.
 
-    '콜 대비' 합 = 전체 취소율(13.3%), '취소 중 비중' 합 = 1.
+    '콜 대비' 합 = 전체 취소율(15.44%), '취소 중 비중' 합 = 1.
     """
     kind = pd.Series(cancel_kind(calls))
     counts = kind.value_counts().reindex(list(CANCEL_KINDS), fill_value=0)
