@@ -144,9 +144,14 @@ def test_dong_keys_align_with_original_analysis(calls, data_dir):
 
 @pytest.mark.slow
 def test_gini_reproduces_target(calls):
-    """검증 기준 0.092 는 정본인 동 균등가중으로 재현된다(calibration.md † 각주)."""
+    """지니 두 종이 각각 재현되는지 — 판정은 픽업, 참고는 총 대기다."""
+    # 판정 지표 — 매칭이 섞이지 않은 픽업 격차(A-19)
+    assert metrics.pickup_gini(calls) == pytest.approx(
+        metrics.TARGETS["pickup_gini"], abs=0.005)
+    # 참고 지표 — 총 대기 지니. 매칭 지니(0.150)가 섞여 픽업보다 높다
     assert metrics.dong_gini(calls) == pytest.approx(
-        metrics.TARGETS["gini_dong"], abs=0.002)
+        metrics.REFERENCE_TARGETS["gini_dong"], abs=0.002)
+    assert metrics.dong_gini(calls) > metrics.pickup_gini(calls)
     # 콜수 가중(참고용, 채점 대상 아님)은 다른 값이라는 사실을 고정해 둔다
     assert metrics.dong_gini(calls, weighted=True) == pytest.approx(0.0986, abs=0.002)
 
@@ -575,6 +580,23 @@ def test_build_dong_table_reproduces_dong_universe(calls, data_dir):
 
 @pytest.mark.slow
 def test_overall_metrics_pass_verification(calls):
-    """전체값 6개가 검증 기준을 모두 통과해야 한다."""
+    """판정 대상(픽업·취소·지니)이 전부 통과하고, 참고 행은 판정되지 않아야 한다."""
     cmp = metrics.compare_to_target(metrics.overall_metrics(calls))
-    assert (cmp["판정"] == "OK").all(), cmp.to_string(index=False)
+    judged = cmp[cmp["구분"] == "판정"]
+    assert len(judged) == len(metrics.TARGETS)
+    assert (judged["판정"] == "OK").all(), judged.to_string(index=False)
+    # 참고 행은 판정을 매기지 않는다 — A-19 의 미재현이 실점이 되면 안 된다
+    ref = cmp[cmp["구분"] == "참고"]
+    assert len(ref) == len(metrics.REFERENCE_TARGETS)
+    assert (ref["판정"] == "").all()
+    # 참고값도 실측과는 맞아야 한다(정의가 어긋나면 여기서 걸린다)
+    assert (ref["차이"].abs() < 0.5).all()
+
+
+def test_period_targets_round_trip(calls):
+    """구간 실측에서 뽑은 기준으로 그 구간을 채점하면 차이가 0이다."""
+    tg, ref = metrics.period_targets(calls)
+    cmp = metrics.compare_to_target(metrics.overall_metrics(calls),
+                                    targets=tg, reference=ref)
+    assert (cmp["차이"].abs() < 1e-9).all()
+    assert (cmp[cmp["구분"] == "판정"]["판정"] == "OK").all()

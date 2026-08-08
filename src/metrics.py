@@ -47,19 +47,47 @@ from travel_time import RIDE_MIN_RANGE, SPEED_RANGE, haversine_km
 # cancel_ratio 의 분자에서 정산 미기록(is_unsettled — calibration.md 흡수 사실 ⑵)은 뺀다. 승차
 # 기록이 없어 취소처럼 보이지만 배차→하차 구간이 실재해 운행은 이루어진 건이다.
 # 넣으면 15.48%, 빼면 15.44% — 원 산출과 맞는 쪽은 후자다.
+# **판정 대상은 픽업·취소·형평이다**(2026.08.09 재정의).
+#
+# 대기는 매칭(배차−접수)과 픽업(승차−배차)으로 갈리는데, **거점 배치가 실제로
+# 바꾸는 것은 픽업뿐이다** — 매칭은 배차 시스템이 콜을 언제 차에 붙이느냐이고
+# 위치와 상관이 적다. 그런데 시뮬은 매칭을 재현하지 못한다(실측 22.0분 vs 시뮬
+# 3.7분). 원인이 기사 수락 절차 쪽으로 보이지만 데이터로 가릴 수 없어 이식하지
+# 않는다 — 실측 분포를 상수로 박으면 배치가 매칭을 줄이는 경로가 0이 되고,
+# 재현이 아니라 답을 베껴 넣는 것이 된다(A-19).
+#
+# 그래서 **총 대기 4개를 판정에서 빼고 참고로 돌린다.** 총 대기 = 매칭 + 픽업이라
+# 매칭을 못 맞추면 총 대기는 구조적으로 짧게 나오고, 그 미달을 이유로 검증을
+# 떨어뜨리면 정작 배치가 바꾸는 구간의 재현도를 볼 수 없다.
+# **형평도 픽업 기준이다.** 총 대기 지니(0.092)는 매칭 지니(0.150)와 픽업 지니
+# (0.070)의 혼합인데, 매칭을 재현하지 않으므로(A-19) 총 대기 지니로 채점하면
+# 재현하지 않기로 한 구간을 채점하는 셈이 된다. 픽업 지니는 필터 없이도 실측과
+# 가깝다(시뮬 0.0805 vs 실측 0.0751 — 허용 0.005 를 근소하게 넘긴다).
+# 필터를 켜면 0.0519 로 멀어지므로 방향은 분명하다 — 공간 구조는 대체로 재현된다.
 TARGETS = {
+    "pickup_mean": 18.8,
+    "pickup_p50": 17.8,
+    "pickup_p90": 29.4,
+    "cancel_ratio": 0.154,
+    "pickup_gini": 0.070,
+}
+
+# 판정 허용오차. 시간은 분, 비율은 절대비율.
+TARGET_TOL = {
+    "pickup_mean": 0.5, "pickup_p50": 0.5, "pickup_p90": 1.0,
+    "cancel_ratio": 0.002, "pickup_gini": 0.005,
+}
+
+# 참고값 — **판정하지 않는다.** 시뮬이 여기서 미달하는 것은 알려진 한계(A-19)이지
+# 배치안의 성능이 아니다. 값이 움직였는지 보려고 함께 산출만 한다.
+REFERENCE_TARGETS = {
     "mean_wait": 40.8,
     "median_wait": 32.0,
     "p90_wait": 80.4,
     "long_wait_ratio": 0.192,   # 60분 초과
-    "cancel_ratio": 0.154,
-    "gini_dong": 0.092,
-}
-
-# 판정 허용오차. 대기시간은 분, 비율은 절대비율.
-TARGET_TOL = {
-    "mean_wait": 0.3, "median_wait": 0.3, "p90_wait": 0.5,
-    "long_wait_ratio": 0.005, "cancel_ratio": 0.002, "gini_dong": 0.002,
+    "match_mean": 22.0,         # 배차 − 접수. 시뮬이 재현하지 못하는 구간
+    "abandoned_ratio": 0.0854,  # 대기 중 포기 — 인내심 곡선(A-14)의 검증 목표
+    "gini_dong": 0.092,         # 총 대기 지니 — 매칭이 섞여 있어 참고로만
 }
 
 # A-12(정의는 docs/assa_log.md): 콜수가 적은 동은 평균이 크게 흔들려 지니를 왜곡한다.
@@ -653,6 +681,20 @@ def dong_gini(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG,
     return gini(tbl["mean_wait"], weights=tbl["n_calls"] if weighted else None)
 
 
+def pickup_gini(log: pd.DataFrame, *, min_calls: int = MIN_CALLS_PER_DONG) -> float:
+    """동간 **픽업 대기** 지니(동 균등가중). 검증 기준 0.070.
+
+    **형평의 판정 지표는 이쪽이다.** 총 대기 지니(0.092)는 매칭 지니(0.150)와
+    픽업 지니(0.070)가 섞인 값인데, 시뮬은 매칭을 재현하지 않기로 했다(A-19).
+    재현하지 않는 구간이 섞인 지표로 채점하면 그 미재현이 형평 점수로 넘어온다.
+
+    **거점 배치가 줄이려는 격차가 곧 픽업 격차다** — 차가 멀리 있어서 생기는
+    차이. 동별 픽업 평균은 실측 13.9~29.3분으로 2.1배 벌어져 있다.
+    """
+    d = log.assign(_pickup=pickup_min(log))
+    return dong_gini(d, min_calls=min_calls, wait_col="_pickup")
+
+
 def gini(values, weights=None) -> float:
     """지니계수(가중치 선택 가능). 0 = 완전균등, 1 = 완전불균등.
 
@@ -689,17 +731,31 @@ def gini(values, weights=None) -> float:
 # ─────────────────────────────────────────────────────────────
 
 def overall_metrics(calls: pd.DataFrame) -> dict:
-    """전체(서울 합산) 지표. 검증 기준과 같은 6개, 같은 분모.
+    """전체(서울 합산) 지표. `TARGETS`(판정) + `REFERENCE_TARGETS`(참고) 전부.
 
-    대기 4개는 승차 완료 건, 취소율은 접수 전체, 지니는 100건 이상 동이 분모다.
+    분모가 갈린다 — 대기·픽업은 승차 완료 건, 취소율·포기율은 접수 전체,
+    지니는 100건 이상 동이다.
+
+    **픽업(승차−배차)이 판정의 중심이다.** 거점 배치가 바꾸는 구간이 여기다.
+    매칭(배차−접수)은 배차 시스템이 정하는 구간이라 참고로만 낸다.
     """
     w = calls["wait_min"].dropna()
+    p = pickup_min(calls).dropna()
+    kind = pd.Series(cancel_kind(calls))
     return {
+        # 판정 대상
+        "pickup_mean": float(p.mean()),
+        "pickup_p50": float(p.median()),
+        "pickup_p90": float(p.quantile(0.90)),
+        "cancel_ratio": float(is_canceled(calls).mean()),
+        "pickup_gini": pickup_gini(calls),
+        # 참고
         "mean_wait": float(w.mean()),
         "median_wait": float(w.median()),
         "p90_wait": float(w.quantile(0.90)),
         "long_wait_ratio": float((w > LONG_WAIT_MIN).mean()),
-        "cancel_ratio": float(is_canceled(calls).mean()),
+        "match_mean": float(calls["assign_min"].dropna().mean()),
+        "abandoned_ratio": float((kind == "abandoned").mean()),
         "gini_dong": dong_gini(calls),
     }
 
@@ -723,16 +779,43 @@ def cancel_breakdown(calls: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def compare_to_target(result: dict) -> pd.DataFrame:
-    """검증: 산출값 vs 검증 기준 대조표. 허용오차는 TARGET_TOL."""
+def compare_to_target(result: dict, *, targets: dict = None,
+                      reference: dict = None) -> pd.DataFrame:
+    """검증 대조표. **판정은 `TARGETS` 만** 하고 `REFERENCE_TARGETS` 는 함께 싣는다.
+
+    참고 행의 `판정` 은 빈칸이다 — 시뮬이 총 대기·매칭에서 미달하는 것은 알려진
+    한계(A-19)이지 배치안의 성능이 아니라, 여기서 X 를 매기면 그 한계가 후보
+    비교를 가로막는다.
+
+    `targets`/`reference` 를 주면 그것으로 대조한다 — **대표 기간 재생은 연간
+    기준이 아니라 그 구간의 실측값과 대조해야 한다**(A-03, provenance 13절).
+    """
+    targets = TARGETS if targets is None else targets
+    reference = REFERENCE_TARGETS if reference is None else reference
+
     rows = []
-    for key, target in TARGETS.items():
+    for key, target in targets.items():
         got = result.get(key, np.nan)
-        tol = TARGET_TOL[key]
-        rows.append({"지표": key, "산출": got, "기준": target,
+        tol = TARGET_TOL.get(key, np.nan)
+        rows.append({"구분": "판정", "지표": key, "산출": got, "기준": target,
                      "차이": got - target, "허용": tol,
                      "판정": "OK" if abs(got - target) <= tol else "X"})
+    for key, target in reference.items():
+        got = result.get(key, np.nan)
+        rows.append({"구분": "참고", "지표": key, "산출": got, "기준": target,
+                     "차이": got - target, "허용": np.nan, "판정": ""})
     return pd.DataFrame(rows)
+
+
+def period_targets(calls: pd.DataFrame) -> tuple[dict, dict]:
+    """어떤 구간의 실측에서 (판정 기준, 참고 기준)을 뽑는다.
+
+    대표 기간 재생을 채점할 때 쓴다. 연간 기준을 그대로 대면 안 되는 이유는
+    **지니가 기간 길이에 편향되기 때문**이다 — 동별 평균의 표본오차가 동 간
+    분산에 얹혀, 30일 창에서는 같은 동을 놓고도 연간 0.0887 → 0.1062 로 오른다.
+    """
+    got = overall_metrics(calls)
+    return ({k: got[k] for k in TARGETS}, {k: got[k] for k in REFERENCE_TARGETS})
 
 
 if __name__ == "__main__":

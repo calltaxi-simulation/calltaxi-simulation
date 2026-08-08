@@ -62,6 +62,7 @@ import numpy as np
 import pandas as pd
 
 import load
+import travel_time
 
 # 대체 반경. 근거는 모듈 docstring.
 NEAR_RADIUS_M = 1000.0
@@ -227,7 +228,7 @@ def recalc_representative_points(targets, calls: pd.DataFrame = None, *,
     **이 추정량이 수렴하는 값이 곧 콜 가중 출발지점의 평균이다.** 목적동 중심점
     오차는 방향이 흩어져 상쇄되고, 출발지가 동 안에 퍼져 있다는 사실은 그대로
     남는다. k 를 함께 추정하므로 우회계수 설정값에 기대지 않는다 — 실제로 추정된
-    k 중앙은 1.33 으로 `travel_time.DETOUR`(1.36)와 독립적으로 맞아떨어진다.
+    k 중앙은 1.33 으로 `travel_time.DETOUR`(1.33)와 독립적으로 맞아떨어진다.
 
     **정확도.** 대표점 문제가 없는 동(면적 최소 40곳)에 같은 방법을 적용하면
     중심점에서 중앙 317m · p90 488m 움직인다. 이것이 방법의 잡음 바닥이다.
@@ -479,7 +480,7 @@ def main() -> None:
                      .loc[list(zip(rep["gu"], rep["dong_canon"])), "is_assigned"]
                      .to_numpy()).sum())
     print(f"  구제 {n_saved}개 동 · 추정 우회계수 중앙 {rep['detour_k'].median():.3f}"
-          f" (travel_time.DETOUR = 1.36)")
+          f" (travel_time.DETOUR = {travel_time.DETOUR})")
 
     print(f"\n동 {len(assign)}개 · 경계 밖 후보 {assign.attrs['n_outside_boundary']}곳\n")
 

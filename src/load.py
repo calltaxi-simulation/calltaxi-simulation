@@ -601,6 +601,117 @@ def load_disabled_population(path: Path = None) -> pd.DataFrame:
     return out[cols].reset_index(drop=True)
 
 
+_IDLE_GAP_COLS = ["차량번호", "배차일시", "승차일시", "하차일시"]
+
+
+def load_idle_gaps(path: Path = None, *, use_cache: bool = True) -> np.ndarray:
+    """당일 내 유휴 구간 길이(분) 전수. 시뮬의 휴게 임계 θ 캘리브레이션 입력.
+
+    정의는 `idle.py` 와 같다 — 어떤 운행의 **하차** ~ 같은 차량의 **다음 배차**.
+    자정을 넘긴 구간은 근무 종료~다음 근무 시작이 섞여 있어 뺀다(그쪽은 '유휴'가
+    아니다). 음수(중복 배차)도 뺀다.
+
+    **이 배열이 θ 의 근거다.** 시뮬은 'θ 분 동안 배차가 없으면 휴게'로 공급을
+    줄이는데, 휴게 길이를 자유 파라미터로 두면 θ 가 대기를 맞추는 손잡이가 된다.
+    대신 여기서 `gap > θ` 인 구간의 **초과분 분포**를 그대로 뽑아 쓴다 — 파라미터는
+    θ 하나뿐이고 휴게 길이는 실측에서 나온다.
+
+    한계: 실측의 긴 구간에는 '쉬어서 안 받은 것'과 '부를 콜이 없어서 못 받은 것'이
+    섞여 있다. 둘을 가를 자료가 없어 전부 휴게로 읽으므로 **θ 는 공급 감소를
+    과대 추정하는 쪽으로 치우친다.**
+
+    반환: float32 1차원 배열(정렬됨)
+    """
+    path = Path(path) if path else DATA_DIR / CALLS_FILE
+    st = path.stat()
+    cache = CACHE_DIR / f"idlegap_v1_{int(st.st_mtime)}_{st.st_size}.parquet"
+    if use_cache and cache.exists():
+        return pd.read_parquet(cache)["idle_min"].to_numpy(dtype="float32")
+
+    df = pd.read_csv(path, encoding="utf-8-sig", usecols=_IDLE_GAP_COLS, low_memory=False)
+    assign = pd.to_datetime(df["배차일시"], format="ISO8601", errors="coerce")
+    board = pd.to_datetime(df["승차일시"], format="ISO8601", errors="coerce")
+    alight = pd.to_datetime(df["하차일시"], format="ISO8601", errors="coerce")
+    vehicle = pd.to_numeric(df["차량번호"], errors="coerce")
+
+    ok = board.notna() & alight.notna() & assign.notna() & vehicle.notna()
+    t = pd.DataFrame({"vehicle_id": vehicle[ok].astype("int64"),
+                      "assigned_at": assign[ok], "alighted_at": alight[ok]})
+    t = t.sort_values(["vehicle_id", "assigned_at"], kind="stable")
+    nxt = t.groupby("vehicle_id", sort=False)["assigned_at"].shift(-1)
+
+    gap = (nxt - t["alighted_at"]).dt.total_seconds() / 60
+    same_day = t["alighted_at"].dt.normalize() == nxt.dt.normalize()
+    out = np.sort(gap[(gap >= 0) & same_day].to_numpy(dtype="float32"))
+
+    if use_cache:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"idle_min": out}).to_parquet(cache, index=False)
+    return out
+
+
+_RESERVATION_COLS = ["접수일시", "예정일시", "배차일시", "하차일시"]
+
+
+def load_reservation_occupancy(path: Path = None, *, use_cache: bool = True) -> pd.DataFrame:
+    """예약콜이 시간대별로 묶어두는 차량 대수. 가정 A-11 의 차감량.
+
+    **예약콜은 시뮬에서 재생하지 않는다.** 쿼터제(성수기 평일 시간대별 100명, 심야
+    3명)로 검열된 수요라 그대로 재생하면 "쿼터 때문에 못 한 콜"이 없는 것처럼 된다.
+    대신 그 운행이 실제로 차량을 묶어둔 만큼을 가용 대수에서 뺀다 — 차감하지 않으면
+    같은 차량을 쓰는 예약 운행이 시뮬에 안 잡혀 **가용 차량이 과대**해진다.
+
+    차감량을 '건수'가 아니라 **동시 점유 대수**로 낸다. 건수는 운행 길이를 무시해서
+    한 시간에 20건이 각각 10분짜리인 경우와 90분짜리인 경우를 같게 만든다. 구간
+    [배차, 하차)를 시간 칸에 잘라 넣고 (60분 × 일수)로 나눈 값이라, 그 시각에 평균
+    몇 대가 예약콜에 묶여 있었나가 된다(idle.hourly_concurrency 와 같은 산식).
+
+    점유 시작을 **배차일시**로 잡는다. 승차가 아니라 배차부터 그 차량은 이미 그 콜에
+    매여 공차 이동 중이다(idle.py 의 유휴 정의와 같은 이유).
+
+    평일 07시 102대 · 08시 113대로 오전에 몰린다 — 574대 기준 20%다. **검증에서
+    오전 시간대가 어긋나면 1순위 용의자가 여기다**(A-11).
+
+    반환: hour(0~23) × is_weekend 2열 — 컬럼 `weekday`, `weekend` (대수, float)
+    """
+    path = Path(path) if path else DATA_DIR / CALLS_FILE
+    cache = CACHE_DIR / f"reservation_v1_{int(path.stat().st_mtime)}_{path.stat().st_size}.parquet"
+    if use_cache and cache.exists():
+        return pd.read_parquet(cache)
+
+    df = pd.read_csv(path, encoding="utf-8-sig", usecols=_RESERVATION_COLS, low_memory=False)
+    received = pd.to_datetime(df["접수일시"], format="ISO8601", errors="coerce")
+    scheduled = pd.to_datetime(df["예정일시"], format="ISO8601", errors="coerce")
+    assigned = pd.to_datetime(df["배차일시"], format="ISO8601", errors="coerce")
+    alighted = pd.to_datetime(df["하차일시"], format="ISO8601", errors="coerce")
+
+    gap = (scheduled - received).abs().dt.total_seconds() / 60
+    ok = ((gap > IMMEDIATE_TOLERANCE_MIN) & assigned.notna() & alighted.notna()
+          & (alighted > assigned))
+    start, end = assigned[ok], alighted[ok]
+
+    epoch = start.min().normalize()
+    s = (start - epoch).dt.total_seconds().to_numpy() / 60
+    e = (end - epoch).dt.total_seconds().to_numpy() / 60
+    is_we = (start.dt.weekday >= 5).to_numpy()
+
+    def occupied(t, h):
+        whole, rem = np.divmod(t, 1440)
+        return whole * 60 + np.clip(rem - 60 * h, 0, 60)
+
+    out = pd.DataFrame({"hour": np.arange(24, dtype="int8")})
+    for col, mask in (("weekday", ~is_we), ("weekend", is_we)):
+        n_days = start[mask].dt.normalize().nunique()
+        out[col] = [float((occupied(e[mask], h) - occupied(s[mask], h)).sum())
+                    / (60 * n_days) for h in range(24)]
+    out.attrs["n_reservations"] = int(ok.sum())
+
+    if use_cache:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        out.to_parquet(cache, index=False)
+    return out
+
+
 _VEHICLE_COLS = ["차량번호", "접수일시", "승차일시", "하차일시", "승차거리"]
 
 
