@@ -104,6 +104,12 @@ python src/idle.py
 # 인내심 분포 추정 (Kaplan-Meier — 시뮬 이탈 로직의 입력)
 python src/patience.py
 
+# 시뮬 실행 (현행 배치 재현 → 검증)
+python src/simulator.py
+
+# 후보 평가 (244곳 × 시드 3회 → 개선율·대비 구간·총절감)
+python src/evaluate.py
+
 # 대시보드 (동별 대기 진단 화면)
 streamlit run src/dashboard.py
 
@@ -112,7 +118,8 @@ pytest
 pytest -m "not slow"    # 대용량 CSV를 읽는 테스트 제외
 ```
 
-시뮬 엔진은 **구현 예정**이다. 지금 실행하면 `NotImplementedError` 로 멈춘다.
+`evaluate.py` 는 중단·재개가 된다. 같은 명령을 다시 치면 이미 끝난 (후보, 시드)는
+건너뛴다. 시드를 나눠 돌리려면 --seeds 42,43 처럼 지정한다.
 
 ```bash
 # 시뮬 실행 (현행 배치 재현 → 검증)  ── 구현 예정
