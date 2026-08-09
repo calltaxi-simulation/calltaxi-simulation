@@ -4,11 +4,11 @@ evaluate.py — 배치안 후보 평가
 `outputs/dong_candidates.csv` 의 배정된 후보 244곳을 하나씩 시뮬에 넣어
 **거점 3km 안 동들의 픽업이 얼마나 줄어드는가**를 잰다.
 
-    .venv/Scripts/python.exe src/evaluate.py                      # 1단계 → 2단계 → 등급
+    .venv/Scripts/python.exe src/evaluate.py                      # 1단계 → 2단계 → 집계
     .venv/Scripts/python.exe src/evaluate.py --stage 1            # 1단계만
     .venv/Scripts/python.exe src/evaluate.py --stage 2 --seeds 42,43
     .venv/Scripts/python.exe src/evaluate.py --stage 2 --all --seeds 43,44
-    .venv/Scripts/python.exe src/evaluate.py --grade              # 결과로 등급만
+    .venv/Scripts/python.exe src/evaluate.py --grade              # 결과로 집계표만
 
 **중간에 끊겨도 이어서 돌린다.** 후보 하나가 끝날 때마다 CSV 에 덧붙이고, 다시
 실행하면 이미 있는 (cand_id, seed) 는 건너뛴다. 한 번에 끝나지 않는 것을 전제로 짰다.
@@ -27,11 +27,11 @@ evaluate.py — 배치안 후보 평가
 효과를 426개 동으로 나눠 보기 때문이다. **3km 로 좁히면 효과가 7.6배(−0.441 vs
 −0.058)로 커진다 — 근거는 그것 하나다.**
 
-전에는 "콜 4,427건이 모여 잡음이 억제된다"도 근거로 적었는데 **그 전제는 데이터에서
-확인되지 않는다.** 시드 3회로 잰 σ 는 범위 안 콜 수와 관계가 없다(log-log +0.110,
-구간별 중앙 0.68/0.86/0.95/0.55). 시드 변동이 표본오차가 아니라 계 전체의 시드
-동역학에서 오기 때문으로 보인다 — 범위를 넓혀도 줄지 않는다. docs/model_flow.md
-「평가 범위」 절의 정정 참조.
+"콜이 모여 잡음이 억제된다"는 부수 효과도 **244곳 실측으로 확인된다** — log-log
+상관 −0.169(절대 Δ 는 −0.274, 기울기 −0.423 으로 1/√n 의 −0.5 에 가깝다),
+콜 구간별 σ 중앙 1.014/0.795/0.777/0.540. 상위 50곳만 봤을 때는 +0.110 으로
+관계가 없어 보였는데 그건 부분집합이 좁아서였다. docs/model_flow.md 「증차 규모」
+절의 「정정의 정정」 참조. **다만 3km 채택 근거는 여전히 효과 크기 7.6배다.**
 
 **3km 는 집계 범위이지 계산 단위가 아니다.** 시뮬은 여전히 동 단위로 돌고,
 결과를 읽을 때 거점 3km 안에 드는 동들(평균 25.4개)의 픽업을 모아 볼 뿐이다.
@@ -43,9 +43,15 @@ evaluate.py — 배치안 후보 평가
 달라, 절대 Δ 로 비교하면 원래 픽업이 긴 지역이 자동으로 유리해진다 — 그건 거점
 효과가 아니라 출발점 차이다. 절대 Δ 는 병기한다.
 
-**결과는 순위가 아니라 등급이다.** `assign_grades` 참조. 등급은 인접 간격만 보므로
-후보가 촘촘하면 **하나로 뭉칠 수 있다** — 그때를 위해 후보별 **대비 구간**을 함께
-낸다("−4.50% ± 0.72%p"). 구간이 겹치면 우열을 못 가리고, 안 겹치면 가릴 수 있다.
+**결과에 등급을 표시하지 않는다.** 등급 계산(`assign_grades`)은 남아 있지만
+표와 CSV 에서는 `ref_` 접두사가 붙은 참고 열로 내렸다 — 244곳을 돌려 보니 등급이
+[상] 4곳 / [하] 240곳으로 나와 표시 자체가 판단을 돕지 못하고, 무엇보다 [상] 4곳
+중 3곳이 표본 부족이라 "최고 등급"이 **가장 좁은 지역을 가리켰다.** 사유는
+docs/model_flow.md 「등급은 계산하되 표시하지 않는다」 절.
+
+**대신 후보별로 이것만 낸다** — 개선율 ± 대비 구간 │ 콜 · 동 · 총절감 │ 표본 부족
+표시 │ 겹치는 후보 수. 구간이 겹치면 우열을 못 가리고, 안 겹치면 가릴 수 있다.
+읽는 사람이 등급 하나를 받는 대신 네 가지를 직접 본다.
 
 **3km 콜이 적은 후보는 「표본 부족」으로 표시한다**(`MIN_CALLS_SCOPE`). 범위가
 좁으면 개선율이 커 보이지만 혜택이 닿는 사람이 적다. 계산에서 빼지는 않는다.
@@ -101,12 +107,16 @@ COMPARISON_K = GRADE_SIGMA_K / 2 ** 0.5
 # 줄면 S/N ∝ √n 이므로 S/N 을 1.7(2.55 의 2/3) 위로 두려면
 # 4,427 × (1.7/2.55)² ≈ 1,967 건이 필요하다.
 #
-# **다만 이 유도의 전제(콜이 모이면 잡음이 준다)는 아직 확인되지 않았다.** 시드
-# 2회로 잰 σ 는 콜수와 상관이 거의 없었다(log-log +0.09). 시드 변동이 범위 안
-# 표본오차가 아니라 시뮬 전체의 시드 동역학에서 오는 것으로 보인다. 그렇다면
-# 이 표시의 실제 의미는 잡음이 아니라 **수혜 규모**다 — 동 2개·콜 666건에 걸린
-# 개선율과 동 30개·콜 6,000건에 걸린 개선율은 같은 무게로 읽을 수 없다.
-# 시드 3회가 쌓이면 σ 와 콜수의 관계를 다시 볼 것.
+# **유도의 전제(콜이 모이면 잡음이 준다)는 244곳 × 3시드로 확인됐다**(08.10).
+# log-log 상관 −0.169, 절대 Δ 기울기 −0.423. 상위 50곳만 볼 때는 +0.09~+0.11 로
+# 관계가 없어 보였는데 그 부분집합이 콜 수 범위가 좁았기 때문이다. 표본 부족
+# 12곳의 대비 구간 폭 중앙은 2.87%p 로 정상 232곳의 1.68%p 보다 넓다.
+#
+# **표시의 의미는 잡음과 수혜 규모 둘 다다** — 동 2개·콜 666건에 걸린 개선율과
+# 동 30개·콜 6,000건에 걸린 개선율은 같은 무게로 읽을 수 없다.
+#
+# **기준값 2,000 은 그대로 둔다.** 관계가 확인됐다고 문턱을 옮기면 결과를 보고
+# 규칙을 고치는 것이라 사후 선택이다.
 MIN_CALLS_SCOPE = 2000
 
 
@@ -281,12 +291,43 @@ def seeds_missing(results: pd.DataFrame, target_ids, seeds) -> list:
 
 
 # ─────────────────────────────────────────────────────────────
-# 등급
+# 후보 집계표 (등급은 참고 열로만 남는다)
 # ─────────────────────────────────────────────────────────────
+
+# 후보 한 곳이 읽히는 순서. **개선율 → 그 불확실성 → 규모 → 경고** 순으로 두어
+# 왼쪽부터 읽으면 "얼마나 좋은가 / 얼마나 확실한가 / 몇 명에게 닿는가"가 차례로
+# 나오게 했다. 등급 3열은 맨 끝 참고 열이다.
+_GRADE_COLUMNS = [
+    "cand_id", "cand_name", "gu", "dongs", "n_seed", "n_dong_scope",
+    "n_calls_scope", "before", "delta", "rate_pct", "rate_sd",
+    "rate_lo", "rate_hi", "interval", "sample_ok", "total_delta_min",
+    "n_overlap", "rank_rate", "rank_total",
+    "grade", "gap_prev", "threshold_prev",
+]
+
+# CSV 로 나갈 때 참고 열에 붙는 접두사. **열을 지우지 않는 이유** — 등급 규칙은
+# 사전 고정된 규칙이라 결과를 보고 지우면 그 자체가 사후 선택이다. 재현·감사에
+# 필요하므로 남기되, 이름과 위치로 "이건 판단 근거가 아니다"를 못 박는다.
+_REF_COLUMNS = ("grade", "gap_prev", "threshold_prev")
+
+
+def report_frame(graded: pd.DataFrame) -> pd.DataFrame:
+    """CSV 로 내보낼 형태 — 등급 3열을 `ref_` 접두사로 바꿔 맨 뒤로 보낸다.
+
+    CSV 를 여는 사람이 `grade` 열을 보면 그걸로 고른다. 열 이름 자체가
+    "참고용"이라고 말하게 두는 편이 주석보다 확실하다.
+    """
+    return graded.rename(columns={c: f"ref_{c}" for c in _REF_COLUMNS})
+
 
 def assign_grades(results: pd.DataFrame, *, stage: int = 2,
                   k: float = GRADE_SIGMA_K) -> pd.DataFrame:
-    """개선율 순으로 정렬한 뒤 **σ 기반으로** 등급을 가른다.
+    """후보별 집계표. 개선율 순 정렬 + 대비 구간 + 수혜 규모 + 겹침 수.
+
+    **등급도 함께 계산하지만 표시하지 않는다.** 규칙은 아래 그대로 남아 있고
+    `grade`·`gap_prev`·`threshold_prev` 열도 그대로 나온다 — 다만 보고와 CSV 에서는
+    `ref_` 참고 열로 내려간다(`report_frame`). 규칙을 지운 것이 아니라 **표시를
+    고친 것이다.** 사유는 docs/model_flow.md 「등급은 계산하되 표시하지 않는다」.
 
     **규칙(결과를 보기 전에 고정).** 인접 후보의 개선율 차이가 두 후보의
     σ 로 만든 문턱 `k · sqrt(σᵢ² + σⱼ²)` 이상이면 거기서 등급을 나누고,
@@ -309,9 +350,14 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
 
     **등급이 하나로 뭉칠 수 있다 — 그건 결함이 아니라 결과다.** 이 규칙은 인접
     간격만 본다. 후보들이 촘촘히 깔리면 양 끝이 크게 벌어져 있어도 중간에 σ 만 한
-    빈틈이 없어 한 등급이 된다. 그때 "구분이 안 된다"가 정직한 보고다. 그래서
-    등급과 **함께 후보별 대비 구간을 낸다** — 등급이 하나여도 양 끝처럼 구간이
-    안 겹치는 쌍은 우열을 말할 수 있고, 실무자가 표에서 직접 읽는다.
+    빈틈이 없어 한 등급이 된다. 그때 "구분이 안 된다"가 정직한 보고다. 244곳에서
+    실제로 그렇게 됐고(240곳이 한 덩어리), **그래서 표시를 대비 구간과 겹침 수로
+    바꿨다** — 구간이 안 겹치는 쌍은 등급 없이도 우열을 말할 수 있다.
+
+    **`n_overlap` — 그 후보와 대비 구간이 겹치는 다른 후보의 수.** 등급 한 글자가
+    하던 일("얘는 어느 무리인가")을 후보마다 숫자로 낸다. 0 이면 단독으로 갈리고,
+    크면 그 후보의 순위는 그만큼 말할 수 없다는 뜻이다. 등급과 달리 **인접 간격이
+    아니라 그 후보 자신의 구간**을 보므로 촘촘히 깔려도 뭉개지지 않는다.
 
     한계: σ 를 3개 표본에서 추정하므로 σ 자체가 흔들린다. 등급 경계가 한두
     후보 차이로 달라질 수 있으니 경계 근처는 같은 등급으로 읽는 편이 안전하다.
@@ -323,8 +369,8 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
 
     반환: cand_id, cand_name, gu, dongs, n_seed, n_dong_scope, n_calls_scope,
           before, delta, rate_pct, rate_sd, rate_lo, rate_hi, interval,
-          sample_ok, total_delta_min, rank_rate, rank_total, grade,
-          gap_prev, threshold_prev
+          sample_ok, total_delta_min, n_overlap, rank_rate, rank_total,
+          grade, gap_prev, threshold_prev  ← 뒤 셋은 참고 열
     """
     cids = results.loc[results["stage"] == stage, "cand_id"].unique()
     if len(cids) == 0:
@@ -380,24 +426,31 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
     # 정렬 키가 개선율인 것은 2단계 컷과 등급 규칙이 그 기준으로 사전 고정돼
     # 있기 때문이다 — 지금 바꾸면 사후 선택이 된다.
     g["total_delta_min"] = g["delta"] * g["n_calls_scope"]
+
+    # **겹치는 후보 수.** 등급을 표시하지 않으므로 "이 후보는 몇 곳과 구분되지
+    # 않는가"를 후보마다 직접 낸다. 244×244 불리언이라 메모리는 문제되지 않는다.
+    lo, hi = g["rate_lo"].to_numpy(), g["rate_hi"].to_numpy()
+    g["n_overlap"] = ((lo[:, None] <= hi[None, :])
+                      & (hi[:, None] >= lo[None, :])).sum(axis=1) - 1
+
     g["rank_rate"] = g["rate_pct"].rank(method="min").astype(int)
     g["rank_total"] = g["total_delta_min"].rank(method="min").astype(int)
-    return g
+    return g[_GRADE_COLUMNS]
 
 
 def overlaps(graded: pd.DataFrame, cand_id: int) -> pd.DataFrame:
     """한 후보와 **대비 구간이 겹치는** 후보들 — "얘랑 얘는 못 가린다"를 뽑는다.
 
-    등급이 하나로 뭉쳤을 때 이게 실질적인 읽기 도구다. 겹치지 않는 후보와는
-    우열을 말할 수 있다.
+    등급을 표시하지 않으므로 이게 "무리 짓기"의 실질적인 도구다. 겹치지 않는
+    후보와는 우열을 말할 수 있다. 개수만 필요하면 `n_overlap` 열을 쓴다.
     """
     row = graded.loc[graded["cand_id"] == cand_id]
     if row.empty:
-        raise ValueError(f"cand {cand_id} 가 등급표에 없다")
+        raise ValueError(f"cand {cand_id} 가 집계표에 없다")
     lo, hi = float(row["rate_lo"].iloc[0]), float(row["rate_hi"].iloc[0])
     hit = (graded["rate_lo"] <= hi) & (graded["rate_hi"] >= lo)
     return graded.loc[hit, ["cand_id", "cand_name", "gu", "interval",
-                            "grade", "sample_ok"]]
+                            "n_calls_scope", "total_delta_min", "sample_ok"]]
 
 
 def _grade_labels(n: int) -> list:
@@ -423,51 +476,57 @@ def _grade_labels(n: int) -> list:
 
 
 def _cand_line(r) -> str:
-    """후보 한 줄 — **개선율과 수혜 규모를 한 줄에 나란히.**
+    """후보 한 줄 — 등급 대신 내는 네 가지를 **한 줄에 나란히** 둔다.
 
-    개선율만 보이면 범위가 좁은 후보가 위를 차지한 것을 알아채지 못한다.
-    콜수와 총 절감 분을 같은 줄에 두어 눈이 함께 가게 한다.
+        개선율 ± 대비 구간 │ 콜 · 동 · 총절감 │ 겹침 수 │ 표본 부족
+
+    개선율만 보이면 범위가 좁은 후보가 위를 차지한 것도, 그 순위가 다른 수십
+    곳과 구분되지 않는다는 것도 알아채지 못한다. 넷을 같은 줄에 두어 눈이 함께
+    가게 한다 — 따로 찾아야 하는 정보는 보지 않는다.
     """
     flag = "" if r.sample_ok else " ※표본부족"
     return (f"      {r.cand_id:>4} {r.cand_name[:18]:<20} {r.interval:>17} │ "
             f"콜 {r.n_calls_scope:>6,} · 동 {r.n_dong_scope:>2} · "
-            f"총 {r.total_delta_min:>+7,.0f}분{flag}")
+            f"총 {r.total_delta_min:>+7,.0f}분 │ 겹침 {r.n_overlap:>3}곳{flag}")
 
 
-def grade_report(graded: pd.DataFrame) -> str:
-    """등급별 요약 문장. **순위로 읽지 말라**와 **대비 구간**을 함께 낸다."""
-    n_grade = graded["grade"].nunique()
+def candidate_report(graded: pd.DataFrame, *, top: int = 20) -> str:
+    """후보 요약 문장. **등급을 쓰지 않는다** — 네 가지를 후보마다 나란히 낸다.
+
+        개선율 ± 대비 구간 │ 콜 · 동 · 총절감 │ 겹침 수 │ 표본 부족
+
+    등급을 뺀 이유는 docs/model_flow.md 「등급은 계산하되 표시하지 않는다」 —
+    244곳에서 [상] 4곳 / [하] 240곳으로 나와 표시가 판단을 돕지 못했고, [상] 4곳
+    중 3곳이 표본 부족이라 최고 등급이 가장 좁은 지역을 가리켰다.
+    """
     lines = []
+    n = len(graded)
+    lo, hi = graded["rate_pct"].min(), graded["rate_pct"].max()
+    lines.append(f"  후보 {n}곳 · 개선율 {lo:+.2f} ~ {hi:+.2f}% "
+                 f"(폭 {abs(hi - lo):.2f}%p) · 시드 간 σ 중앙 "
+                 f"{graded['rate_sd'].median():.3f}%p")
+    lines.append("  **등급은 표시하지 않는다** — 판단을 대신하는 표시라 "
+                 "실무자에게 선택을 열어 두려는 도구의 성격과 어긋난다.")
+    lines.append("     아래 네 가지를 직접 읽을 것. `겹침`이 클수록 그 후보의 "
+                 "순위는 그만큼 말할 수 없다는 뜻이다.")
+    lines.append("")
 
-    if n_grade == 1:
-        lines.append(f"  [등급 1개] {len(graded)}곳이 **하나로 뭉쳤다.** "
-                     "인접 후보의 차이가 어디서도 문턱을 넘지 못했다는 뜻이지,")
-        lines.append("     후보들이 다 똑같다는 뜻이 아니다 — 양 끝은 "
-                     f"{graded['rate_pct'].min():+.2f}% 와 "
-                     f"{graded['rate_pct'].max():+.2f}% 로 "
-                     f"{abs(graded['rate_pct'].max() - graded['rate_pct'].min()):.2f}%p "
-                     "벌어져 있다.")
-        lines.append("     **아래 대비 구간으로 읽을 것.** 구간이 안 겹치는 쌍은 "
-                     "우열을 말할 수 있다.")
-        lines.append("")
-
-    for name, gg in graded.groupby("grade", sort=False):
-        lines.append(
-            f"  [{name}] {len(gg)}곳 · 개선율 {gg['rate_pct'].min():+.2f} ~ "
-            f"{gg['rate_pct'].max():+.2f}% · 절대 Δ {gg['delta'].mean():+.3f}분")
-        for r in gg.head(5).itertuples():
-            lines.append(_cand_line(r))
-        if len(gg) > 5:
-            lines.append(f"      … 외 {len(gg) - 5}곳")
+    lines.append(f"  ▸ **개선율 상위 {min(top, n)}** (정렬은 개선율, 순위표가 아니다):")
+    for r in graded.head(top).itertuples():
+        lines.append(_cand_line(r))
 
     # 최상위 후보가 몇 곳과 겹치는가 — "1위"를 말할 수 있는지의 답이다.
     best = graded.iloc[0]
-    n_ov = int(((graded["rate_lo"] <= best["rate_hi"])
-                & (graded["rate_hi"] >= best["rate_lo"])).sum()) - 1
+    n_ov = int(best["n_overlap"])
     lines.append("")
     lines.append(f"  ▸ 개선율 1위 {best['cand_name'][:20]}({int(best['cand_id'])}) "
                  f"{best['interval']} 는 **다른 {n_ov}곳과 구간이 겹친다** — "
                  f"{'단독 1위라 말할 수 없다.' if n_ov else '겹치는 후보가 없다.'}")
+    if n_ov:
+        worst = graded.loc[(graded["rate_lo"] <= best["rate_hi"])
+                           & (graded["rate_hi"] >= best["rate_lo"]), "rank_rate"].max()
+        lines.append(f"     그 {n_ov}곳에는 개선율 {int(worst)}위까지 들어간다. "
+                     "1위보다 확실히 나은 후보도, 1위가 확실히 나은 후보도 없다.")
 
     weak = graded.loc[~graded["sample_ok"]]
     if len(weak):
@@ -481,6 +540,18 @@ def grade_report(graded: pd.DataFrame) -> str:
             lines.append(_cand_line(r))
         lines.append("     범위가 좁아 개선율이 커 보이지만 혜택이 닿는 사람이 "
                      "그만큼 적다. 계산에서 뺀 것은 아니다.")
+        # **표본 크기가 개선율 순위를 밀어 올린다** — 전체 비율과 상위권 비율을
+        # 나란히 내야 그 편향이 눈에 띈다. 숫자 하나로는 "12곳뿐"으로 읽힌다.
+        ok = graded["sample_ok"]
+        lines.append(
+            f"     전체의 {len(weak) / len(graded) * 100:.1f}% 인데 개선율 상위 "
+            f"10 중 {n_weak_top}곳이다. 평균 개선율 "
+            f"{graded.loc[~ok, 'rate_pct'].mean():+.2f}% vs 정상 "
+            f"{graded.loc[ok, 'rate_pct'].mean():+.2f}%, 구간 폭 중앙 "
+            f"{(graded.loc[~ok, 'rate_hi'] - graded.loc[~ok, 'rate_lo']).median():.2f} "
+            f"vs {(graded.loc[ok, 'rate_hi'] - graded.loc[ok, 'rate_lo']).median():.2f}%p.")
+        lines.append("     **개선율 순위는 표본 크기의 함수다** — 콜이 적으면 "
+                     "분모가 작아 비율이 튀고 구간도 넓어진다.")
 
     # ── 두 번째 시선: 총 절감 분. **정렬을 갈아치우는 게 아니라 병기다.**
     lines.append("")
@@ -498,16 +569,16 @@ def grade_report(graded: pd.DataFrame) -> str:
     lines.append("     **둘 중 하나로 정렬하면 반대 방향으로 오독된다** — 개선율은 "
                  "범위가 좁은 곳을, 총절감은 콜이")
     lines.append("     많은 도심을 위로 올린다. 표의 정렬이 개선율인 것은 2단계 "
-                 "컷과 등급 규칙이 그 기준으로")
-    lines.append("     사전 고정돼 있기 때문이지, 그쪽이 더 옳아서가 아니다.")
+                 "컷이 그 기준으로 사전 고정돼")
+    lines.append("     있기 때문이지, 그쪽이 더 옳아서가 아니다.")
 
     lines.append("")
-    lines.append("  ※ **등급 안에서는 우열을 가릴 수 없다.** 인접 후보의 차이가 "
-                 f"{GRADE_SIGMA_K}σ 에 못 미쳐 같은 등급으로 묶은 것이므로,")
-    lines.append("     같은 등급의 목록 순서를 순위로 읽으면 안 된다.")
+    lines.append("  ※ **구간이 겹치는 후보끼리는 우열을 가릴 수 없다.** 목록 순서를 "
+                 "순위로 읽으면 안 된다 — 겹침 수가")
+    lines.append("     그 후보를 몇 곳과 구분할 수 없는지 말해 준다.")
     lines.append(f"  ※ **대비 구간은 신뢰구간이 아니다.** 평균 ± {COMPARISON_K:.2f}σ "
-                 "로, 두 구간이 겹치지 않는 것과 등급이 갈리는 것이")
-    lines.append("     같은 말이 되도록 맞춘 폭이다(등급 규칙에서 유도). "
+                 f"로, 두 구간이 겹치지 않는 것과 {GRADE_SIGMA_K}σ 문턱이")
+    lines.append("     갈리는 것이 같은 말이 되도록 맞춘 폭이다. "
                  "95% 같은 신뢰수준을 뜻하지 않는다 — σ 는 rate_sd 열에 따로 있다.")
     lines.append("  ※ **절감폭의 절대 크기는 과소평가다.** 시뮬 픽업 수준이 실측의 "
                  "53%라(A-19·A-20) 여기 나온 값도")
@@ -528,7 +599,7 @@ def main(argv=None):
     ap.add_argument("--stage", type=int, choices=(1, 2), default=None,
                     help="한 단계만 실행. 기본은 1 → 2 연속")
     ap.add_argument("--grade", action="store_true",
-                    help="재생하지 않고 이미 있는 결과로 등급만 매긴다")
+                    help="재생하지 않고 이미 있는 결과로 집계표만 다시 낸다")
     ap.add_argument("--seeds", type=str, default=None,
                     help="쉼표로 구분한 시드 목록(예: 42,43). 나눠 돌릴 때 쓴다. "
                          "생략하면 1단계 42 · 2단계 42,43,44")
@@ -542,9 +613,9 @@ def main(argv=None):
 
     if args.grade:
         graded = assign_grades(load_results())
-        graded.to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
-        print(f"[등급] {graded['grade'].nunique()}개 등급 · {len(graded)}곳\n")
-        print(grade_report(graded))
+        report_frame(graded).to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
+        print(f"[집계] 후보 {len(graded)}곳\n")
+        print(candidate_report(graded))
         print(f"\n저장: {GRADE_PATH}")
         return
 
@@ -584,20 +655,20 @@ def main(argv=None):
         run_stage(2, cands[cands["cand_id"].isin(short)],
                   picked or STAGE2_SEEDS, **kw)
 
-        # 시드를 다 돌리기 전에는 등급을 매기지 않는다 — 반복이 덜 쌓인 σ 로
-        # 경계를 가르면 나중에 시드를 채웠을 때 등급이 달라진다.
+        # 시드를 다 돌리기 전에는 집계표를 내지 않는다 — 반복이 덜 쌓인 σ 로
+        # 대비 구간을 그리면 나중에 시드를 채웠을 때 겹침 관계가 달라진다.
         results = load_results()
         missing = seeds_missing(results, short, STAGE2_SEEDS)
         if missing:
-            print(f"\n[등급 보류] 시드 {missing} 가 아직 없다. 다 돌린 뒤 "
-                  f"`--grade` 로 매길 것 — 반복이 덜 쌓인 σ 로 가르면 경계가 흔들린다.")
+            print(f"\n[집계 보류] 시드 {missing} 가 아직 없다. 다 돌린 뒤 "
+                  f"`--grade` 로 낼 것 — 반복이 덜 쌓인 σ 로는 구간이 흔들린다.")
             print(f"저장: {RESULT_PATH}")
             return
 
         graded = assign_grades(results)
-        graded.to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
-        print(f"\n[등급] {graded['grade'].nunique()}개 등급 · {len(graded)}곳\n")
-        print(grade_report(graded))
+        report_frame(graded).to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
+        print(f"\n[집계] 후보 {len(graded)}곳\n")
+        print(candidate_report(graded))
         print(f"\n저장: {RESULT_PATH} / {GRADE_PATH}")
 
 

@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""후보 평가 점검 — 이어 돌리기와 등급 규칙.
+"""후보 평가 점검 — 이어 돌리기와 대비 구간.
 
 이 둘은 **조용히 틀리면 잡히지 않는다.** 이어 돌리기가 깨지면 후보 몇 개가
-말없이 빠진 채 등급이 매겨지고, 등급 규칙이 어긋나면 구분되지 않는 후보가
-다른 등급으로 갈려 실무자가 근거 없는 선택을 하게 된다.
+말없이 빠진 채 집계되고, 구간 규칙이 어긋나면 구분되지 않는 후보가 갈라져
+실무자가 근거 없는 선택을 하게 된다.
+
+등급 규칙(`assign_grades` 안)은 남아 있고 여기서도 계속 검사한다 — **다만
+보고와 CSV 에는 나오지 않는다.** 그 경계도 함께 지킨다.
 """
 import sys
 from pathlib import Path
@@ -185,12 +188,49 @@ def test_grades_are_monotone_in_rate():
     assert (np.diff(codes) >= 0).all(), "등급이 개선율 순서와 어긋난다"
 
 
-def test_grade_report_carries_the_warnings():
-    """보고 문구에 '등급 안에서는 우열을 가릴 수 없다'와 과소평가가 있어야 한다."""
+def test_report_carries_the_warnings():
+    """보고 문구에 '우열을 가릴 수 없다'와 과소평가가 있어야 한다."""
     g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.1, -0.9])]))
-    txt = E.grade_report(g)
+    txt = E.candidate_report(g)
     assert "우열을 가릴 수 없다" in txt
     assert "과소평가" in txt
+
+
+# ─────────────────────────────────────────────────────────────
+# 등급을 표시하지 않는다 — 규칙은 남기고 표시만 뺀다
+# ─────────────────────────────────────────────────────────────
+
+def test_report_never_shows_grades():
+    """**보고에 등급이 나오면 안 된다.** 판단을 대신하는 표시라 뺐다.
+
+    244곳에서 [상] 4곳 / [하] 240곳이 나왔고 그 [상] 4곳 중 3곳이 표본
+    부족이었다 — 최고 등급이 가장 좁은 지역을 가리켰다. 되살아나면 여기서 잡힌다.
+    """
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.1, -0.9])]))
+    assert set(g["grade"]) == {"상", "하"}, "등급 계산 자체는 남아 있어야 한다"
+
+    txt = E.candidate_report(g)
+    for token in ("[상]", "[하]", "[등급", "등급 1개"):
+        assert token not in txt, f"보고에 등급 표시가 남았다: {token}"
+    assert "등급은 표시하지 않는다" in txt
+
+
+def test_csv_frame_demotes_grade_to_reference_columns():
+    """CSV 에서 등급 3열은 `ref_` 접두사로 맨 뒤에 있어야 한다.
+
+    **지우지는 않는다** — 사전 고정된 규칙을 결과를 보고 지우면 그 자체가 사후
+    선택이다. 재현·감사에 필요하므로 남기되 이름과 위치로 참고용임을 못 박는다.
+    """
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.1, -0.9])]))
+    cols = list(E.report_frame(g).columns)
+
+    assert cols[-3:] == ["ref_grade", "ref_gap_prev", "ref_threshold_prev"]
+    for bare in ("grade", "gap_prev", "threshold_prev"):
+        assert bare not in cols, f"맨 이름의 {bare} 열이 CSV 에 남았다"
+    # 실무자가 읽어야 할 열은 앞쪽에 그대로 있다.
+    for keep in ("rate_pct", "interval", "n_calls_scope", "n_dong_scope",
+                 "total_delta_min", "sample_ok", "n_overlap"):
+        assert keep in cols
 
 
 # ─────────────────────────────────────────────────────────────
@@ -226,14 +266,28 @@ def test_interval_half_width_is_derived_from_grade_k():
     assert np.allclose(half, E.GRADE_SIGMA_K / np.sqrt(2) * g["rate_sd"])
 
 
-def test_report_says_when_everything_merges():
-    """등급이 1개면 **'뭉쳤다'를 명시**해야 한다 — 침묵하면 '다 똑같다'로 읽힌다."""
+def test_report_says_how_many_the_top_cannot_be_told_from():
+    """구분이 안 될 때 **몇 곳과 겹치는지 명시**해야 한다 — 침묵하면 1위로 읽힌다.
+
+    등급이 하나로 뭉치던 자리를 겹침 수가 대신한다.
+    """
     g = E.assign_grades(_rows([(1, [-5.0, -5.4, -4.6]), (2, [-4.9, -5.3, -4.5]),
                                (3, [-4.8, -5.2, -4.4])]))
-    assert g["grade"].nunique() == 1
-    txt = E.grade_report(g)
-    assert "하나로 뭉쳤다" in txt
-    assert "대비 구간으로 읽을 것" in txt
+    assert list(g["n_overlap"]) == [2, 2, 2], "셋이 서로 다 겹쳐야 한다"
+    txt = E.candidate_report(g)
+    assert "다른 2곳과 구간이 겹친다" in txt
+    assert "단독 1위라 말할 수 없다" in txt
+
+
+def test_n_overlap_counts_only_actual_overlaps():
+    """겹침 수는 **자기를 빼고** 실제로 구간이 닿는 후보만 센다."""
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-5.05, -5.15, -4.95]),
+                               (3, [-1.0, -1.1, -0.9])]))
+    n_ov = dict(zip(g["cand_id"], g["n_overlap"]))
+    assert n_ov == {1: 1, 2: 1, 3: 0}, "멀리 떨어진 3 이 끼거나 자기를 셌다"
+    # `overlaps` 목록 길이와 어긋나면 안 된다 — 표와 숫자가 따로 놀면 못 믿는다.
+    for cid, n in n_ov.items():
+        assert len(E.overlaps(g, cid)) == n + 1
 
 
 def test_overlaps_lists_the_indistinguishable():
@@ -258,7 +312,21 @@ def test_thin_scope_is_flagged_but_not_dropped():
     flag = dict(zip(g["cand_id"], g["sample_ok"]))
     assert flag[1] is False or flag[1] == False   # noqa: E712
     assert flag[2] is True or flag[2] == True     # noqa: E712
-    assert "표본 부족" in E.grade_report(g)
+    assert "표본 부족" in E.candidate_report(g)
+
+
+def test_report_shows_the_sample_size_bias():
+    """**표본 부족이 개선율 상위에 몰린다**는 사실을 보고가 말해야 한다.
+
+    "12곳뿐"으로 읽히면 편향이 숨는다. 전체 비율과 상위권 비율을 나란히 낸다.
+    """
+    thin = _rows([(1, [-9.0, -9.4, -8.6])], calls=E.MIN_CALLS_SCOPE - 1)
+    thick = _rows([(i, [-3.0 - i * 0.1, -3.2 - i * 0.1, -2.8 - i * 0.1])
+                   for i in range(2, 6)], calls=E.MIN_CALLS_SCOPE * 3)
+    g = E.assign_grades(pd.concat([thin, thick], ignore_index=True))
+    txt = E.candidate_report(g)
+    assert "개선율 순위는 표본 크기의 함수다" in txt
+    assert "vs 정상" in txt
 
 
 # ─────────────────────────────────────────────────────────────
@@ -289,11 +357,16 @@ def test_narrow_scope_wins_on_rate_but_loses_on_scale():
 
 
 def test_report_shows_scale_beside_rate():
-    """후보 줄에 개선율과 함께 콜수·총절감이 나와야 한다 — 따로 찾게 두면 안 본다."""
+    """후보 한 줄에 **네 가지가 다** 나와야 한다 — 따로 찾게 두면 안 본다.
+
+    개선율 ± 대비 구간 │ 콜 · 동 · 총절감 │ 겹침 수 │ 표본 부족.
+    """
     g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.2, -0.8])],
                               calls=3000))
-    txt = E.grade_report(g)
+    txt = E.candidate_report(g)
     assert "콜  3,000" in txt or "콜 3,000" in txt
+    assert "±" in txt and "동 20" in txt
+    assert "겹침" in txt
     assert "총 절감 분 상위" in txt
     assert "반대 방향으로 오독된다" in txt
 
