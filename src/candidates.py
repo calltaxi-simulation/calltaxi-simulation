@@ -295,9 +295,7 @@ def assign_dong_candidates(cands: pd.DataFrame = None, *,
     얼마나 멀어서 빠졌는지가 그 판정의 근거라, 비워두면 확인할 수가 없다.
     `dist_m`(배정된 후보까지 거리)은 배정된 동에만 있다.
 
-    `capacity` 는 시뮬 입력용 총 면수다. `capacity_available`(시영 실측 잔여면)은
-    후보 품질 참고값으로 따라올 뿐 배정 순위에 쓰지 않는다 — 65곳만 잔여면
-    기준이면 후보 간 비교에서 자가 섞인다.
+    `capacity` 는 시뮬 입력용 총 면수다. 배정 순위도 이 값으로만 낸다.
 
     `rep_points` 를 주면(`recalc_representative_points` 산출) 해당 동의 `dong_lat`
     /`dong_lon` 을 그 값으로 갈아끼운 뒤 거리를 잰다. 어느 동이 갈렸는지는
@@ -307,8 +305,7 @@ def assign_dong_candidates(cands: pd.DataFrame = None, *,
     반환 컬럼:
       gu, dong_canon, adm_nm, adm_cd2, dong_lat, dong_lon, area_km2, rep_source,
       assign_rule, is_assigned, n_outdoor_in_dong, nearest_dist_m,
-      cand_id, cand_name, capacity, capacity_available,
-      source, cand_lat, cand_lon, dist_m, cand_beyond_cap
+      cand_id, cand_name, capacity, source, cand_lat, cand_lon, dist_m, cand_beyond_cap
     """
     if cands is None:
         cands = load.load_candidates()
@@ -362,8 +359,7 @@ def assign_dong_candidates(cands: pd.DataFrame = None, *,
     nearest.index = dong.loc[is_rest, "adm_cd2"].to_numpy()
     nearest["dist_m"] = dong.loc[is_rest, "nearest_dist_m"].to_numpy()
 
-    keep = ["cand_id", "name", "capacity", "capacity_available",
-            "source", "lat", "lon", "dist_m"]
+    keep = ["cand_id", "name", "capacity", "source", "lat", "lon", "dist_m"]
     picked = pd.concat([best[keep], nearest[keep]])
 
     out = dong.merge(
@@ -388,7 +384,7 @@ def assign_dong_candidates(cands: pd.DataFrame = None, *,
 
     # 배정 안 된 동은 후보 칸을 비운다. 값이 남아 있으면 "가장 가까운 후보"가
     # "배정된 후보"로 잘못 읽힌다.
-    blank = ["cand_id", "cand_name", "capacity", "capacity_available",
+    blank = ["cand_id", "cand_name", "capacity",
              "source", "cand_lat", "cand_lon", "dist_m"]
     out.loc[~out["is_assigned"], blank] = np.nan
     out["cand_id"] = out["cand_id"].astype("Int64")
@@ -414,8 +410,7 @@ def assign_dong_candidates(cands: pd.DataFrame = None, *,
     cols = ["gu", "dong_canon", "adm_nm", "adm_cd2", "dong_lat", "dong_lon",
             "area_km2", "rep_source", "assign_rule", "is_assigned", "n_outdoor_in_dong",
             "nearest_dist_m",
-            "cand_id", "cand_name", "capacity", "capacity_available",
-            "source", "cand_lat", "cand_lon", "dist_m", "cand_beyond_cap"]
+            "cand_id", "cand_name", "capacity", "source", "cand_lat", "cand_lon", "dist_m", "cand_beyond_cap"]
     return out[cols].sort_values(["gu", "dong_canon"]).reset_index(drop=True)
 
 
@@ -452,8 +447,7 @@ def main() -> None:
     print(f"후보 풀 {cands.attrs['n_pool']}곳 → 옥외 {len(cands)}곳 "
           f"{cands['capacity'].sum():,}면 "
           f"(옥내 {enc.get('옥내', 0)} · 혼합 {enc.get('혼합', 0)} 제외 — A-15)")
-    print("시뮬 입력 용량 = 총 면수(전 후보 동일) · 실가용 면수 "
-          f"{cands.attrs['capacity_available_note']}는 참고 컬럼")
+    print("시뮬 입력 용량 = 총 면수(전 후보 동일)")
 
     print("\n대표점 재계산 중 (산지형 7동 — 콜 로딩 포함)...")
     rep = recalc_representative_points(CENTROID_RECALC_DONG)

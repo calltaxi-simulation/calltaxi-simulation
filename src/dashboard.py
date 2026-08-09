@@ -67,6 +67,9 @@ DEPOT_COLOR = "#2F4858"
 CAND_COLOR = "#C8722B"
 # 후보 점 클릭을 코로플레스 클릭과 구분하는 태그(customdata 첫 칸)
 CAND_TAG = "cand"
+# customdata 에서 cand_id 가 앉는 칸. build_map 이 싣고 클릭 처리기가 꺼낸다 —
+# 칸이 밀리면 엉뚱한 후보가 열리므로 양쪽이 이 상수를 함께 본다.
+CAND_ID_IDX = 6
 PANEL_BG = "#FBFAF8"
 
 PERIOD_ORDER = ["심야", "아침", "낮", "저녁"]
@@ -600,22 +603,20 @@ def build_map(poly: pd.DataFrame, selected, show_depots: bool,
         cand = load_candidates()
         # customdata 첫 칸의 태그로 클릭 이벤트에서 후보 점을 구분한다.
         # 코로플레스 점은 location 을 갖고 이 태그가 없다.
-        # 실가용은 시영에만 있다 — 없는 건 -1 로 넘겨 패널에서 행을 뺀다
-        # (None 을 섞으면 plotly customdata 가 문자열로 눌린다).
         # 마지막 칸이 cand_id 다 — 클릭하면 이 값으로 3페이지를 연다.
-        cdata = [[CAND_TAG, n, int(c), s, g, -1 if pd.isna(a) else int(a), d,
-                  int(i)]
-                 for n, c, s, g, a, d, i in zip(
+        # 칸을 늘리거나 줄이면 아래 hovertemplate 의 번호와 클릭 처리기의
+        # cd[CAND_ID_IDX] 가 함께 밀린다.
+        cdata = [[CAND_TAG, n, int(c), s, g, d, int(i)]
+                 for n, c, s, g, d, i in zip(
                      cand["name"], cand["capacity"], cand["source"], cand["gu"],
-                     cand["capacity_available"], cand["assigned_dongs"],
-                     cand["cand_id"])]
+                     cand["assigned_dongs"], cand["cand_id"])]
         fig.add_trace(go.Scattermap(
             lat=cand["lat"], lon=cand["lon"], mode="markers",
             marker=dict(size=7, color=CAND_COLOR),
             customdata=cdata,
             hovertemplate=("%{customdata[1]}<br>%{customdata[2]:,}면 · "
                            "%{customdata[3]} · %{customdata[4]}"
-                           "<br>배정: %{customdata[6]}<extra></extra>"),
+                           "<br>배정: %{customdata[5]}<extra></extra>"),
             name="후보 주차장",
         ))
 
@@ -790,11 +791,7 @@ def note_html(text: str) -> str:
 
 
 def cand_spec_rows(cand_id: int) -> None:
-    """후보 제원 — 면수·소스·실가용. 3페이지 「후보 제원」에 접어 둔다.
-
-    **면수가 시뮬 입력이고 실가용은 참고값이다.** 실측 잔여면은 시영 65곳에만
-    있어서 그것을 용량으로 쓰면 후보 간 비교에서 자가 섞인다. 시영일 때만
-    한 줄 더 붙여 "총 면수만 보면 안 된다"를 화면에서 알 수 있게 한다.
+    """후보 제원 — 면수·소스·자치구. 3페이지 「후보 제원」에 접어 둔다.
 
     예전에는 지도에서 후보를 클릭했을 때 오른쪽에 뜨는 패널이었다. 후보 클릭이
     3페이지로 가게 되면서 이리로 옮겼다 — **사이드바 목록으로 들어와도 같은
@@ -806,17 +803,11 @@ def cand_spec_rows(cand_id: int) -> None:
         st.markdown(note_html("후보 제원을 찾을 수 없습니다."), unsafe_allow_html=True)
         return
     r = hit.iloc[0]
-    available = r["capacity_available"]
-    rows = [("면수", f"{int(r['capacity']):,}면"), ("소스", r["source"]),
-            ("자치구", r["gu"])]
-    # 면수만 있는 후보에는 주석을 달지 않는다 — 표가 그대로 읽힌다.
-    # 실가용이 붙은 시영 65곳만, 두 숫자가 왜 다른지 설명한다.
-    note = ""
-    if pd.notna(available):
-        rows.insert(1, ("실가용 면수 (참고)", f"{int(available):,}면"))
-        note = ("시뮬 입력은 총 면수입니다. 실가용 면수는 피크시간에 실제로 비어 "
-                "있던 면(시영 65곳만)이라 용량으로는 쓰지 않습니다.")
-    st.markdown(rows_html(rows) + note_html(note), unsafe_allow_html=True)
+    st.markdown(rows_html([
+        ("면수", f"{int(r['capacity']):,}면"),
+        ("소스", r["source"]),
+        ("자치구", r["gu"]),
+    ]), unsafe_allow_html=True)
 
 
 def dong_panel(row: pd.Series, df: pd.DataFrame) -> None:
@@ -1056,9 +1047,35 @@ CSS = f"""
   .swatch {{ display: inline-block; width: 10px; height: 10px; border-radius: 2px;
              margin-right: .35rem; vertical-align: middle; }}
 
-  .stButton button {{ background: #FFFFFF; border: 1px solid #DDD9D2;
-                      color: {INK}; font-size: .78rem; border-radius: 6px;
-                      width: 100%; }}
+  /* 버튼 — 화면 톤(저채도 중성)에 맞춘다. 위계는 둘뿐이다:
+     주 동작(결과 보기)은 채워서 앞으로, 보조(돌아가기·해제)는 테두리만.
+     화살표는 라벨 안에 두고 두 칸 띄워 글자와 붙지 않게 했다. */
+  .stButton button, .stButton button:focus:not(:active) {{
+    width: 100%; font-size: .78rem; font-weight: 500;
+    border-radius: 7px; padding: .34rem .7rem;
+    letter-spacing: -0.01em; box-shadow: none;
+    transition: background .16s ease, border-color .16s ease,
+                color .16s ease, transform .08s ease;
+  }}
+  /* 보조 — 바탕에 얹힌 테두리. 평소엔 물러나 있다가 hover 에서만 또렷해진다 */
+  .stButton button[kind="secondary"] {{
+    background: {PANEL_BG}; border: 1px solid #DFDBD4; color: #6E6A62;
+  }}
+  .stButton button[kind="secondary"]:hover {{
+    background: #FFFFFF; border-color: #C4BFB6; color: {INK};
+  }}
+  /* 주 — 잉크색으로 채운다. 저채도 화면에서 유일하게 짙은 면이라 눈에 먼저 든다 */
+  .stButton button[kind="primary"] {{
+    background: {INK}; border: 1px solid {INK}; color: {PANEL_BG};
+  }}
+  .stButton button[kind="primary"]:hover {{
+    background: #3A3733; border-color: #3A3733; color: #FFFFFF;
+  }}
+  /* 눌리는 순간만 1px 내려앉는다 — 소리 없는 확인 */
+  .stButton button:active {{ transform: translateY(1px); }}
+  .stButton button:focus-visible {{ outline: 2px solid #9A968D;
+                                    outline-offset: 2px; }}
+
   details summary {{ font-size: .8rem !important; color: #6E6A62 !important; }}
 </style>
 """
@@ -1097,7 +1114,7 @@ def candidate_picker(sb) -> None:
 
     sb.selectbox("후보", ids, index=idx, key="cand_pick",
                  format_func=lambda c: label_of[c], label_visibility="collapsed")
-    if sb.button("이 후보 결과 보기 →"):
+    if sb.button("이 후보 결과 보기  →", type="primary"):
         st.session_state.sim_cand = st.session_state.cand_pick
         st.session_state.page = 3
         st.rerun()
@@ -1243,8 +1260,9 @@ def main() -> None:
             # 후보를 누르면 **3페이지(시뮬 결과)** 로 간다. 예전에는 오른쪽에
             # 작은 제원 패널만 띄웠는데, 그 내용은 3페이지 「후보 제원」으로
             # 옮겼다 — 목록으로 들어와도 같은 것을 볼 수 있어야 한다.
-            if isinstance(cd, (list, tuple)) and len(cd) > 7 and cd[0] == CAND_TAG:
-                cid = int(cd[7])
+            if (isinstance(cd, (list, tuple)) and len(cd) > CAND_ID_IDX
+                    and cd[0] == CAND_TAG):
+                cid = int(cd[CAND_ID_IDX])
                 if cid != ss.sim_cand or ss.page != 3:
                     ss.sim_cand = cid
                     ss.page = 3
@@ -1258,26 +1276,25 @@ def main() -> None:
                 st.rerun()
 
     with right:
-        if ss.selected is None:
-            st.markdown(
-                '<div class="panel">'
-                + note_html("동을 클릭하면 세부지표가 여기 나타납니다.")
-                + '</div>', unsafe_allow_html=True)
-        else:
+        # 아무 동도 고르지 않았으면 **오른쪽은 비워 둔다.** 안내 문구를 넣으면
+        # 빈 사각형이 하나 서 있게 되는데, 지도만 보고 있을 때 그게 제일 거슬린다.
+        if ss.selected is not None:
             # 전체보기는 패널 맨 위 — 동 이름 바로 위
-            if st.button("← 전체 보기 (선택 해제)"):
+            if st.button("←  전체 보기 (선택 해제)", type="secondary"):
                 ss.selected = None
                 ss.page = 1
                 st.rerun()
 
+            # `<div class="panel">` 만 따로 부르면 Streamlit 이 그 호출을 독립
+            # 요소로 감싸 빈 사각형을 만든다. dong_panel 은 expander 를 쓰므로
+            # 한 문자열로 묶을 수 없어 **패널 테두리를 두르지 않는다.**
             row = poly[poly["adm_cd2"] == ss.selected]
-            st.markdown('<div class="panel">', unsafe_allow_html=True)
             if len(row) and row.iloc[0]["has_metrics"]:
                 dong_panel(row.iloc[0], df)
             else:
                 nm = row.iloc[0]["adm_nm"] if len(row) else "?"
-                st.markdown(f'<div class="dong-name">{nm}</div>', unsafe_allow_html=True)
                 st.markdown(
+                    f'<div class="dong-name">{nm}</div>'
                     '<div class="warn">이 경계에 대응하는 지표 행이 없습니다. '
                     '경계 파일(2023)과 콜 원본의 동 구분이 달라 생긴 공백입니다.</div>',
                     unsafe_allow_html=True)
@@ -1287,30 +1304,22 @@ def main() -> None:
                 st.markdown(note_html(
                     f"지도에 실리지 않는 지표 {len(orphans)}개: {names}. "
                     "대응 경계가 없어 색칠 대상에서 빠집니다."), unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
 
 
-def sim_help_panel(row) -> None:
-    """해석 도움 — **이 화면에서 하지 말아야 할 읽기**를 먼저 막는다.
+def sim_warnings(row) -> None:
+    """이 후보를 읽을 때 걸리는 경고. **절도 제목도 없이 경고만 낸다.**
 
-    순서에 뜻이 있다. 겹침 → 표본 → 절대크기 → 기준. 앞의 둘은 이 후보에만
-    해당하는 경고이고 뒤의 둘은 어느 후보에나 붙는 상시 주석이다.
+    「해석 도움」이라는 절을 두었다가 걷어냈다 — 상시 표시할 내용이 빠지고 나니
+    제목이 빈 상자를 하나 더 만들 뿐이었다. 경고는 있을 때만 나타나는 편이
+    눈에 띈다.
+
+    표본 부족만 후보에 따라 뜨고, 아래 두 줄은 어느 후보에나 붙는다 — 절감폭의
+    크기와 기준 기간은 이 화면의 숫자를 인용할 때 반드시 따라가야 하는 말이다.
     """
-    n_ov = int(row["n_overlap"])
-    if n_ov:
-        st.markdown(
-            f'<div class="warn">대비 구간이 <b>{n_ov}곳</b>과 겹칩니다. '
-            f'이 안에서는 우열을 가릴 수 없습니다.</div>', unsafe_allow_html=True)
-    else:
-        st.markdown(
-            '<div class="warn">대비 구간이 겹치는 후보가 없습니다.</div>',
-            unsafe_allow_html=True)
-
     if not bool(row["sample_ok"]):
         st.markdown(
             f'<div class="warn">3km 콜 {int(row["n_calls_scope"]):,}건으로 '
             f'수혜 범위가 좁습니다.</div>', unsafe_allow_html=True)
-
     st.markdown(note_html(
         "절감폭은 실제보다 작게 나옵니다. 후보 간 비교로 읽으십시오."),
         unsafe_allow_html=True)
@@ -1326,33 +1335,30 @@ def sim_dong_panel(cand_id: int, row) -> None:
     A동에서 클릭한 후보와 B동에서 클릭한 후보가 같을 때 혼란이 생긴다.
     """
     dongs = [d for d in str(row["dongs"]).split(" · ") if d]
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(f'<div class="dong-name">담당 동 {len(dongs)}개</div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="dong-sub">이 후보를 거점으로 배정받은 동</div>',
-                unsafe_allow_html=True)
-    st.markdown(rows_html([(f"{i}", d) for i, d in enumerate(dongs, 1)]),
-                unsafe_allow_html=True)
-
     sc = placement_scope().get(cand_id, {})
-    st.markdown(rows_html([
-        ("3km 영향권", f"{int(row['n_dong_scope'])}개 동"),
-        ("영향권 콜", f"{int(row['n_calls_scope']):,}건"),
-    ]), unsafe_allow_html=True)
-    st.markdown(note_html(
-        "담당 동은 이 후보를 거점으로 배정받은 동, 영향권은 3km 안의 동 "
-        "전부입니다."), unsafe_allow_html=True)
-
-    # 지도에 그려지는 경계 수가 동 수보다 적을 수 있다 — 침묵하면 지도가 거짓말이 된다
+    n_dong = int(row["n_dong_scope"])
     n_un = int(sc.get("n_unmapped", 0))
-    if n_un:
-        st.markdown(note_html(
-            f"지도에는 <b>{len(sc['polys'])}개 경계</b>로 그려집니다. "
-            f"{n_un}개 동은 경계 파일(2023)과 콜 원본의 동 구분이 달라 "
-            f"합쳐졌거나 대응 경계가 없습니다 — 개선율 계산에는 "
-            f"{int(row['n_dong_scope'])}개 동이 다 들어가 있습니다."),
-            unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 지도에 그려지는 경계 수가 동 수보다 적을 수 있다 — 침묵하면 실무자가 세어
+    # 보고 버그로 읽는다. 사유(경계 파일 차이)는 한 마디로 줄인다.
+    gap = note_html(
+        f"지도에는 {len(sc.get('polys', []))}개만 그려집니다(경계 파일 차이). "
+        f"계산에는 {n_dong}개가 다 들어갑니다.") if n_un else ""
+
+    # **패널은 한 번의 markdown 으로 낸다.** `<div class="panel">` 만 따로 부르면
+    # Streamlit 이 그 호출을 독립 요소로 감싸 **빈 사각형**을 하나 만들고, 닫는
+    # 태그도 또 하나를 만든다. 조각내지 말 것.
+    st.markdown(
+        '<div class="panel">'
+        f'<div class="dong-name">담당 동 {len(dongs)}개</div>'
+        '<div class="dong-sub">이 후보를 거점으로 배정받은 동</div>'
+        + rows_html([(f"{i}", d) for i, d in enumerate(dongs, 1)])
+        + rows_html([("3km 영향권", f"{n_dong}개 동"),
+                     ("영향권 콜", f"{int(row['n_calls_scope']):,}건")])
+        + note_html("담당 동은 이 후보를 거점으로 배정받은 동, 영향권은 3km 안의 "
+                    "동 전부입니다.")
+        + gap
+        + '</div>', unsafe_allow_html=True)
 
 
 def render_sim_page() -> None:
@@ -1363,7 +1369,7 @@ def render_sim_page() -> None:
 
     candidate_picker(st.sidebar)
     st.sidebar.divider()
-    if st.sidebar.button("← 지도로 돌아가기"):
+    if st.sidebar.button("←  지도로 돌아가기", type="secondary"):
         ss.page = 2 if ss.selected else 1
         st.rerun()
 
@@ -1374,7 +1380,7 @@ def render_sim_page() -> None:
             '이 후보의 시뮬 결과가 <code>outputs/placement_grades.csv</code> 에 '
             '없습니다. <code>python src/evaluate.py</code> 로 244곳을 돌린 뒤 다시 '
             '보십시오.</div></div>', unsafe_allow_html=True)
-        if st.button("← 지도로"):
+        if st.button("←  지도로", type="secondary"):
             ss.page = 2 if ss.selected else 1
             st.rerun()
         return
@@ -1392,8 +1398,7 @@ def render_sim_page() -> None:
               help="3km 안 동네들의 대기가 평균 몇 % 줄어드는지. "
                    "콜이 많은 동에 더 무게를 둡니다.")
     m2.metric("대비 구간", f"± {row['half']:.2f}%p",
-              help="시뮬을 세 번 돌렸을 때 값이 흔들린 폭. 두 후보의 구간이 "
-                   "겹치면 어느 쪽이 나은지 알 수 없습니다.")
+              help="시뮬을 세 번 돌렸을 때 값이 흔들린 폭.")
     m3.metric("총 절감", f"{row['total_delta_min']:,.0f}분",
               help="3km 안에서 줄어든 대기 시간을 전부 더한 값. 한 달 기준입니다.")
     m4.metric("픽업 before → after",
@@ -1418,16 +1423,12 @@ def render_sim_page() -> None:
                         width="stretch", key=f"simmap-{int(row['cand_id'])}")
 
     with right:
-        if st.button("← 지도로"):
+        if st.button("←  지도로", type="secondary"):
             ss.page = 2 if ss.selected else 1
             st.rerun()
 
         sim_dong_panel(int(row["cand_id"]), row)
-
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="dong-name">해석 도움</div>', unsafe_allow_html=True)
-        sim_help_panel(row)
-        st.markdown('</div>', unsafe_allow_html=True)
+        sim_warnings(row)
 
         with st.expander("후보 제원"):
             cand_spec_rows(int(row["cand_id"]))

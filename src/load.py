@@ -404,65 +404,15 @@ _POOL_COLS = {
     "운영시간": "open_hours", "급지": "price_grade", "이용효율": "usage_efficiency",
 }
 
-# 정보공개청구 17078071 — 파일명에 접수번호가 박혀 있어 이것으로 찾는다.
-# data/ 아래 어느 깊이에 두어도 걸리게 재귀 탐색한다(압축 해제 폴더가 한 겹 더 있다).
-FOIA_PARKING_GLOB = "**/*17078071*.xlsx"
-PEAK_RESIDUAL_SHEET = "2025 피크시간 잔여"
+# **실가용 면수(피크시간 잔여구획)는 쓰지 않는다 — 2026.08.10 철회.**
+# 정보공개청구 17078071 의 `2025 피크시간 잔여` 시트에서 시영 65곳에 붙이던
+# `capacity_available` · `capacity_available_ratio` 열과 `load_peak_residual()`
+# 을 걷어냈다. **639곳 중 65곳(10%)에만 있는 값이라** 참고 컬럼으로 남겨 둬도
+# 후보를 좁힐 때 쓸 수가 없다 — 그 65곳만 다른 자로 재는 셈이 된다.
+# 원본 xlsx 는 그대로 있으므로 되살리려면 git 이력을 볼 것.
 
 
-def find_foia_parking_xlsx(data_dir: Path = None) -> Path | None:
-    """정보공개청구(17078071) 원본 xlsx 경로. 없으면 None."""
-    root = Path(data_dir) if data_dir else DATA_DIR
-    # '~$...' 는 엑셀이 열어둘 때 만드는 잠금 파일이라 걸리면 안 된다
-    hits = sorted(p for p in root.glob(FOIA_PARKING_GLOB)
-                  if not p.name.startswith("~$"))
-    return hits[0] if hits else None
-
-
-def load_peak_residual(path: Path = None) -> pd.DataFrame:
-    """시영주차장 피크시간 잔여구획 → 주차장별 실가용 면수.
-
-    정보공개청구 17078071 의 `2025 피크시간 잔여` 시트(40,515행 = 111곳 × 365일).
-    한 행이 "그 날 가장 붐빈 1시간에 몇 면이 비어 있었나"다.
-
-    **총 면수가 아니라 이 값이 거점 평가의 분모다.** 362면짜리 복정역도 피크에
-    남는 면은 중앙 23면이고, 방화역(동) 67면은 365일 내내 0면이다. 총 면수로
-    후보를 고르면 상시 만차인 주차장을 대형 후보로 착각한다.
-
-    대표값은 **일별 피크잔여의 중앙값**을 쓴다. 평균은 명절·연휴의 큰 값에
-    끌려간다 — 개화산역은 중앙 21면인데 평균 47.7면(최대 212)이다.
-
-    ⚠ 한계 두 가지.
-      - 피크시간은 그 날 가장 붐빈 때라 **하루 중 최악값**이다. 차고지는 박차
-        (17시~익일 07시, A-09)가 주 용도라 야간 여력은 이 값보다 크다.
-        보수적 하한으로 읽어야 한다.
-      - 명칭 조인이라 이름이 바뀌면 조용히 빠진다. 조인 결과는 호출부에서
-        건수로 확인한다.
-
-    반환 컬럼: name, capacity_available, avail_mean, avail_p25, avail_max, n_days
-    """
-    path = Path(path) if path else find_foia_parking_xlsx()
-    if path is None:
-        raise FileNotFoundError(
-            f"정보공개청구 17078071 xlsx 를 {DATA_DIR} 아래에서 찾지 못했다")
-
-    df = pd.read_excel(path, sheet_name=PEAK_RESIDUAL_SHEET)
-    df["name"] = df["주차장명"].astype(str).str.strip()
-
-    g = df.groupby("name")["잔여구획"]
-    out = pd.DataFrame({
-        "capacity_available": g.median(),
-        "avail_mean": g.mean(),
-        "avail_p25": g.quantile(0.25),
-        "avail_max": g.max(),
-        "n_days": g.size(),
-    }).reset_index()
-    out.attrs["source_path"] = str(path)
-    return out
-
-
-def load_candidates(path: Path = None, *, outdoor_only: bool = True,
-                    with_peak_residual: bool = True) -> pd.DataFrame:
+def load_candidates(path: Path = None, *, outdoor_only: bool = True) -> pd.DataFrame:
     """시뮬 거점 후보 풀 로딩 — `sim_pool_v4.csv` (639곳 · 55,798면).
 
     공영·시영 원본 목록을 직접 읽던 방식을 대체한다. v4 풀은 공영·시영에 더해
@@ -480,24 +430,15 @@ def load_candidates(path: Path = None, *, outdoor_only: bool = True,
     **제외분은 버리지 않는다.** `outdoor_only=False` 로 부르면 639곳 전체가
     나온다. 현장에서 유효고를 확인하면 그대로 재편입할 후보다.
 
-    **시뮬 입력 용량은 `capacity` = 총 면수 하나로 통일한다.** 실측 잔여면은
-    시영 65곳에만 있어서, 그것을 용량으로 쓰면 65곳은 잔여면 · 283곳은 총 면수가
-    되어 **후보 간 비교에서 자가 섞인다.** 배치 효과의 후보별 차이가 위치가 아니라
-    측정 기준의 차이에서 나오게 된다.
-
-    실가용 면수는 버리지 않고 **후보 품질 참고값**으로 남긴다.
-      `capacity_available`        시영 65곳 — 피크시간 잔여구획의 일별 중앙값
-      `capacity_available_ratio`  실가용 / 총 면수
-    시영 총 6,950면의 실가용은 1,097면(15.8%)이다. 시뮬 결과가 나온 뒤 후보를
-    좁힐 때 쓴다 — 190면짜리라도 피크에 상시 만차면 거점으로 쓸 수 없다.
-    나머지 283곳에는 잔여 실측 자체가 없어 NaN 이다(0 이 아니다).
+    **용량은 `capacity` = 총 면수 하나뿐이다.** 시영 65곳에만 있던 실측 잔여면
+    (`capacity_available`)은 08.10 에 걷어냈다 — 639곳 중 10%에만 있는 값이라
+    참고로도 쓸 수 없었다. 위 상수 자리의 주석 참조.
 
     cand_id 는 원본 CSV 의 행 순서(1부터)다. 풀을 다시 만들면 번호가 바뀐다 —
     저장 키가 아니라 실행 안에서의 참조용이다.
 
     반환 컬럼: cand_id, name, address, gu, bdong, bdong_cd, lat, lon,
-              capacity(시뮬 입력), capacity_available, capacity_available_ratio,
-              source, public_basis, upis_lclas, upis_name, notice_no,
+              capacity, source, public_basis, upis_lclas, upis_name, notice_no,
               enclosure, is_outdoor, indoor_self, outdoor_self,
               current_depot, current_depot_dist_m,
               open_hours, price_grade, usage_efficiency
@@ -522,27 +463,6 @@ def load_candidates(path: Path = None, *, outdoor_only: bool = True,
         bad = sorted(set(out["gu"]) - set(SEOUL_GU))
         raise ValueError(f"서울 25구가 아닌 자치구가 섞여 있다: {bad}")
 
-    # 실가용 면수 — 참고 컬럼이다. 시뮬 입력 capacity 에는 손대지 않는다.
-    out["capacity_available"] = np.nan
-    n_available = 0
-    avail_note = "미부착"
-    if with_peak_residual:
-        try:
-            avail = load_peak_residual()
-        except (FileNotFoundError, ImportError, ValueError) as e:
-            avail_note = f"미부착 ({type(e).__name__}: {e})"
-        else:
-            m = out["name"].str.strip().map(
-                avail.set_index("name")["capacity_available"])
-            # 잔여 실측은 시영 소스에만 있다. 이름이 같은 공영·KOTSA 건에
-            # 잘못 붙지 않도록 소스로 한 번 더 막는다.
-            m = m.where(out["source"].eq("시영"))
-            out["capacity_available"] = m
-            n_available = int(m.notna().sum())
-            avail_note = f"시영 {n_available}곳"
-
-    out["capacity_available_ratio"] = out["capacity_available"] / out["capacity"]
-
     if outdoor_only:
         out = out[out["is_outdoor"]]
     out = out.reset_index(drop=True)
@@ -552,11 +472,9 @@ def load_candidates(path: Path = None, *, outdoor_only: bool = True,
     out.attrs["capacity_by_enclosure"] = cap_by_enclosure
     out.attrs["n_excluded_indoor_mixed"] = (n_by_enclosure.get("옥내", 0)
                                             + n_by_enclosure.get("혼합", 0))
-    out.attrs["n_capacity_available"] = n_available
-    out.attrs["capacity_available_note"] = avail_note
 
     cols = ["cand_id", "name", "address", "gu", "bdong", "bdong_cd", "lat", "lon",
-            "capacity", "capacity_available", "capacity_available_ratio",
+            "capacity",
             "source", "public_basis", "upis_lclas", "upis_name", "notice_no",
             "enclosure", "is_outdoor", "indoor_self", "outdoor_self",
             "current_depot", "current_depot_dist_m",
@@ -838,11 +756,6 @@ if __name__ == "__main__":
           + " / ".join(f"{k} {enc[k]}곳 {cap[k]:,.0f}면" for k in ("옥외", "옥내", "혼합")))
     print(f"후보(옥외만)   {len(cands):>10,}곳  {cands['capacity'].sum():,}면"
           f"  — 옥내·혼합 {cands.attrs['n_excluded_indoor_mixed']}곳 제외(A-15)")
-    sy = cands["capacity_available"].notna()
-    print(f"  실가용 면수  {cands.attrs['capacity_available_note']}"
-          f"  · 시영 옥외 {int(cands.loc[sy, 'capacity'].sum()):,}면 →"
-          f" {int(cands.loc[sy, 'capacity_available'].sum()):,}면"
-          f"  (시뮬 입력은 총 면수)")
 
     under = load_undersupplied()
     print(f"과소공급 동    {len(under):>10,}개")

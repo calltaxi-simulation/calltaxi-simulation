@@ -159,14 +159,12 @@ def test_radius_widening_only_adds_dong(cands):
     assert wide["is_assigned"].sum() >= base["is_assigned"].sum()
 
 
-def test_capacity_is_sim_input_not_available(assign, cands):
-    """배정 순위는 총 면수로만 낸다 — 실가용은 따라오는 참고값이다."""
+def test_capacity_is_the_only_size_column(assign, cands):
+    """배정 순위는 총 면수로만 낸다. 실가용 열은 08.10 에 철회했다."""
     ok = assign[assign["is_assigned"]]
     by_id = cands.set_index("cand_id")["capacity"]
     assert (ok["capacity"] == ok["cand_id"].map(by_id)).all()
-    # 실가용은 시영 배정분에만 붙는다
-    has = ok["capacity_available"].notna()
-    assert (ok.loc[has, "source"] == "시영").all()
+    assert "capacity_available" not in assign.columns
 
 
 def test_centroid_recalc_dongs_are_unassigned(assign):

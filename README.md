@@ -75,7 +75,6 @@ $env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
 | HangJeongDong_ver20230701.geojson | 동 경계 |
 | 동별_거점용량_접근성.csv | 과소공급 동(3km내 10대 이하) |
 | sim_pool_v4.csv | **거점 후보 풀 639곳 · 55,798면** — 만들어진 과정은 원본 파이프라인 명세(출처는 [docs/external_sources.md](docs/external_sources.md)). 시뮬은 이 중 옥외 348곳만 쓴다(가정 A-15) |
-| 주차장_평균이용률_정보공개청구(17078071) 공개내용.xlsx | 시영 65곳 실가용 면수(피크시간 잔여구획). `data/` 아래 어느 폴더에 두어도 파일명으로 찾는다 |
 
 `공영주차장_목록.csv` / `시영주차장_목록.csv` 는 더 이상 코드가 읽지 않는다 —
 후보 풀 파이프라인의 입력으로 흡수됐고 저장소는 그 산출물(`sim_pool_v4.csv`)만 본다.

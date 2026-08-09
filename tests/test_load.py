@@ -147,41 +147,26 @@ def test_load_candidates_keeps_full_pool(data_dir):
 
 
 def test_capacity_is_total_area_for_every_candidate(data_dir):
-    """시뮬 입력 용량은 전 후보 총 면수 하나로 통일 — 65곳만 잔여면이면 자가 섞인다."""
+    """용량은 전 후보 총 면수 하나뿐이다."""
     c = load.load_candidates(outdoor_only=False)
     raw = pd.read_csv(load.DATA_DIR / "sim_pool_v4.csv", encoding="utf-8-sig")
     assert c["capacity"].sum() == round(raw["면수"].sum()) == 55_798
-    # 실가용이 붙은 시영도 용량은 총 면수 그대로여야 한다
-    sy = c["capacity_available"].notna()
-    assert (c.loc[sy, "capacity"] > c.loc[sy, "capacity_available"]).sum() > 0
-    assert c.loc[sy, "capacity"].sum() == 6_950
+    assert c.loc[c["source"] == "시영", "capacity"].sum() == 6_950
 
 
-def test_peak_residual_is_reference_only(data_dir):
-    """실가용 면수는 참고 컬럼 — 시영에만 붙고, 붙이든 말든 capacity 는 안 바뀐다."""
+def test_peak_residual_is_gone(data_dir):
+    """**실가용 면수는 철회했다**(08.10) — 열도 함수도 남아 있으면 안 된다.
+
+    639곳 중 시영 65곳(10%)에만 있는 값이라 참고 컬럼으로도 쓸 수 없었다.
+    되살아나면 그 65곳만 다른 자로 재게 된다.
+    """
     c = load.load_candidates(outdoor_only=False)
-    assert c.attrs["n_capacity_available"] == 65
-    sy = c["capacity_available"].notna()
-    assert (c.loc[sy, "source"] == "시영").all()
-    assert sy.sum() == (c["source"] == "시영").sum() == 65
-    # 잔여면은 총 면수를 넘을 수 없다
-    assert (c.loc[sy, "capacity_available"] <= c.loc[sy, "capacity"]).all()
-    assert c.loc[sy, "capacity_available_ratio"].between(0, 1).all()
-    assert c.loc[~sy, "capacity_available_ratio"].isna().all()
-
-    off = load.load_candidates(outdoor_only=False, with_peak_residual=False)
-    assert off["capacity_available"].isna().all()
-    assert (off["capacity"] == c["capacity"]).all(), "참고값 유무가 용량을 바꾸면 안 된다"
-
-
-def test_load_peak_residual(data_dir):
-    """피크시간 잔여 시트 — 365일 × 111곳."""
-    r = load.load_peak_residual()
-    assert len(r) == 111
-    assert (r["n_days"] == 365).all()
-    assert (r["capacity_available"] >= 0).all()
-    assert (r["capacity_available"] <= r["avail_max"]).all()
-    assert not r["name"].duplicated().any()
+    for col in ("capacity_available", "capacity_available_ratio"):
+        assert col not in c.columns, f"철회한 열이 살아 있다: {col}"
+    for attr in ("n_capacity_available", "capacity_available_note"):
+        assert attr not in c.attrs
+    for fn in ("load_peak_residual", "find_foia_parking_xlsx"):
+        assert not hasattr(load, fn), f"철회한 함수가 살아 있다: {fn}"
 
 
 def test_load_undersupplied(data_dir):

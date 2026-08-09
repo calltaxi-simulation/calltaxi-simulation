@@ -77,7 +77,6 @@ cd simulation
 | 후보 풀 | **639곳** — 옥외 348곳 24,392면 / 옥내 163곳 17,386면 / 혼합 128곳 14,020면 |
 | 후보(옥외만) | **348곳 24,392면** — 옥내·혼합 291곳 제외(A-15) |
 | 시뮬 입력 용량 | `capacity` = **총 면수**(전 후보 동일 기준) |
-| 실가용 면수(참고) | 시영 **65곳** 부착 — 옥외 53곳 3,528면 → **744면** |
 | 과소공급 동 | 68개 (`vehicles_3km` 0~10대) |
 | 콜 | **1,222,330건** (원본 1,390,969행 — 특장차 한정본) |
 | 기간 | 2025-01-01 ~ 2025-12-31 |
@@ -467,10 +466,6 @@ cd simulation
 `assign_rule == '보류_대표점'` 행이고, 대표점이 갈린 동은 `rep_source` 컬럼으로
 구분된다(`centroid` / `call_weighted`).
 
-**배정 후보의 실가용 면수가 10면 미만인 동 21개** — 전부 시영이다.
-용량 자체는 총 면수로 넣으므로 시뮬에는 영향이 없고, A-08(차고지별 10대 이상)과
-맞물리는 **후보 품질 문제**라 시뮬 뒤 후보를 좁힐 때 쓴다.
-
 산출물은 `outputs/dong_candidates.csv` (426행).
 
 ## 12. 시뮬레이터
@@ -516,7 +511,6 @@ cd simulation
 | 동 좌표 조회표 | `build_dong_lookup()`, `canon_dong()`, `_base_dong()` | `load` |
 | 운행 로딩 | `load_rides()`, `load_vehicle_trips()` | `travel_time`, `load` |
 | 거점·후보지·인구 | `load_depots()`, `load_candidates()`, `load_disabled_population()` | `load` |
-| 시영 실가용 면수 | `load_peak_residual()`, `find_foia_parking_xlsx()` | `load` |
 | 동별 후보 배정 | `assign_dong_candidates()`, `locate_candidates()`, `assignment_summary()` | `candidates` |
 | 유휴 구간 | `load_trips()`, `build_gaps()`, `hourly_concurrency()` | `idle` |
 | 인내심 곡선 | `build_observations()`, `kaplan_meier()`, `km_grid()` | `patience` |

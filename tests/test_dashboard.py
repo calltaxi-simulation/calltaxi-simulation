@@ -81,15 +81,24 @@ def test_depot_layer_click_changes_nothing(cand):
 
 
 def test_map_customdata_carries_cand_id(cand):
-    """후보 점 클릭이 3페이지로 가려면 customdata 에 cand_id 가 있어야 한다."""
+    """후보 점 클릭이 3페이지로 가려면 customdata 에 cand_id 가 있어야 한다.
+
+    칸 번호(`CAND_ID_IDX`)를 build_map 과 클릭 처리기가 함께 본다 — 실가용
+    면수를 뺄 때 칸이 한 자리 밀렸고, 상수로 묶지 않았으면 엉뚱한 후보가 열렸다.
+    """
     poly = D.resolve_polygons.__wrapped__()
     fig = D.build_map(poly, None, True, True, D.DEFAULT_METRIC)
     tr = [t for t in fig.data if getattr(t, "name", "") == "후보 주차장"]
     assert tr, "후보 레이어가 없다"
     cds = tr[0].customdata
+    i = D.CAND_ID_IDX
     assert len(cds) == len(cand)
-    assert all(c[0] == D.CAND_TAG and isinstance(c[7], int) for c in cds)
-    assert {c[7] for c in cds} == set(cand["cand_id"].astype(int))
+    assert all(len(c) == i + 1 for c in cds), "cand_id 는 마지막 칸이어야 한다"
+    assert all(c[0] == D.CAND_TAG and isinstance(c[i], int) for c in cds)
+    assert {c[i] for c in cds} == set(cand["cand_id"].astype(int))
+    # hovertemplate 이 참조하는 칸이 실제로 다 있어야 한다
+    for n in range(1, i):
+        assert all(c[n] is not None for c in cds)
 
 
 # ─────────────────────────────────────────────────────────────
