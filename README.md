@@ -138,15 +138,16 @@ simulation/
 │  ├ idle.py         # 유휴 구간(하차 → 다음 배차)
 │  ├ patience.py     # 인내심 분포(Kaplan-Meier)
 │  ├ candidates.py   # 동별 거점 후보 배정(후보 풀 → 행정동 426개)
-│  ├ simulator.py    # 시뮬 엔진(SimPy) — 구현 예정
-│  └ dashboard.py    # Streamlit 진단 대시보드
+│  ├ simulator.py    # 시뮬 엔진(SimPy)
+│  ├ evaluate.py     # 후보 평가 실행(244곳 × 시드 3회, 중단·재개)
+│  └ dashboard.py    # Streamlit 대시보드(진단 + 후보 결과)
 ├ docs/
 │  ├ assa_log.md         # 가정 대장(A-01~A-16) — 가정 부호의 정본
 │  ├ calibration.md      # 정본 — 모듈별 필터·지표 정의·타깃 근거·한계
 │  ├ provenance.md       # 산출값 대장(스크립트를 돌려 얻은 현재 값)
 │  ├ model_flow.md       # 시뮬 설계 — 흐름도·조 편성·엔진·난수
 │  ├ dashboard_spec.md   # 대시보드 화면 결정과 근거
-│  ├ external_sources.md # 코드 밖 근거 — 문헌·구술·소급 기록·저장소 밖 자료
+│  └ external_sources.md # 코드 밖 근거 — 문헌·구술·소급 기록·저장소 밖 자료
 ├ tests/            # pytest
 ├ cache/            # 콜 원본 parquet 캐시(자동 생성, git 제외)
 └ outputs/          # 결과
@@ -156,7 +157,9 @@ simulation/
    ├ idle_by_hour.csv            # 시간대별 평균 동시 유휴 차량 수
    ├ patience_km.csv             # 인내심 생존곡선(0.5분 격자) — src/patience.py 산출
    ├ patience_summary.csv        # 인내심 추정 요약 1행
-   └ dong_candidates.csv         # 동 426개 × 배정된 후보(383동 · 244곳) — src/candidates.py 산출
+   ├ dong_candidates.csv         # 동 426개 × 배정된 후보(383동 · 244곳) — src/candidates.py 산출
+   ├ placement_eval.csv          # 후보 평가 원값(244곳 × 시드 3회 = 732행) — src/evaluate.py 산출
+   └ placement_grades.csv        # 후보별 개선율·대비 구간·총절감·겹침 수
 ```
 
 지표 함수는 파일을 읽지 않고 데이터프레임만 받는다. 실측 콜(진단)과 시뮬 로그(예측)에
