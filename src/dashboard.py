@@ -921,22 +921,25 @@ def dong_panel(row: pd.Series, df: pd.DataFrame) -> None:
         keys = set(zip(sub["gu"], sub["dong_canon"]))
         d = dm[[k in keys for k in zip(dm["gu"], dm["dong_canon"])]]
         n_calls = float(sub["n_calls"].sum())
-        cells = [f'<tr><th>전체</th><td colspan="3">{fmt(n_calls, "건", 0)}</td></tr>']
+        # **값마다 단위를 달고 평일·주말은 칸 안에 이름을 적는다.** 예전에는
+        # 표 아래에 "단위 건. 평일/주말은 각각 앞·뒤 두 칸"이라 적어 두었는데,
+        # 표를 읽으려고 주석을 먼저 읽어야 하는 표는 잘못 짠 표다.
+        # 헤더(심야·아침·낮·저녁)는 시간대 행에만 걸리므로 다른 행은 스스로 말해야 한다.
+        cells = [f'<tr><th>전체</th><td colspan="4">{fmt(n_calls, "건", 0)}</td></tr>']
         if len(d):
             by_p = d.groupby("period", observed=True)["n_calls"].sum()
             pv = "".join(
-                f"<td>{fmt(by_p.get(p, 0), '', 0)}</td>" for p in PERIOD_ORDER)
+                f"<td>{fmt(by_p.get(p, 0), '건', 0)}</td>" for p in PERIOD_ORDER)
             cells.append(f'<tr><th>시간대</th>{pv}</tr>')
             by_w = d.groupby("is_weekend")["n_calls"].sum()
             cells.append(
-                f'<tr><th>평일/주말</th><td colspan="2">'
-                f'{fmt(by_w.get(False, 0), "", 0)}</td>'
-                f'<td colspan="2">{fmt(by_w.get(True, 0), "", 0)}</td></tr>')
+                f'<tr><th>평일/주말</th>'
+                f'<td colspan="2">평일 {fmt(by_w.get(False, 0), "건", 0)}</td>'
+                f'<td colspan="2">주말 {fmt(by_w.get(True, 0), "건", 0)}</td></tr>')
         st.markdown(
             '<table class="grid"><thead><tr><th></th><th>심야</th><th>아침</th>'
             f'<th>낮</th><th>저녁</th></tr></thead><tbody>{"".join(cells)}</tbody>'
-            '</table>' + note_html("단위 건. 평일/주말은 각각 앞·뒤 두 칸"),
-            unsafe_allow_html=True)
+            '</table>', unsafe_allow_html=True)
 
     with st.expander("소요시간·속도·거리"):
         st.markdown(rows_html([
@@ -1119,8 +1122,13 @@ def candidate_picker(sb) -> None:
         st.session_state.page = 3
         st.rerun()
 
+    # 라벨에 두 숫자가 붙어 있으니 각각이 무엇인지 여기서 한 번 말한다.
+    # 세 번째 줄이 표본 부족으로 이어진다 — 같은 이야기의 앞뒤다.
     n_weak = int((~g["sample_ok"]).sum())
     sb.markdown(note_html(
+        "개선율 — 3km 안 대기가 몇 % 줄어드는지<br>"
+        "총절감 — 줄어든 시간의 합 (한 달 기준)<br>"
+        "좁은 지역일수록 개선율이 커 보입니다. 둘을 함께 보십시오.<br>"
         f"※표본부족 <b>{n_weak}곳</b> — 3km 콜 {E.MIN_CALLS_SCOPE:,}건 미만이라 "
         f"개선율이 커 보여도 닿는 사람이 적습니다."), unsafe_allow_html=True)
 
@@ -1293,11 +1301,12 @@ def main() -> None:
                 dong_panel(row.iloc[0], df)
             else:
                 nm = row.iloc[0]["adm_nm"] if len(row) else "?"
+                # 왜 비었는지(경계 파일 연도 차이)는 실무자가 할 일이 없는
+                # 내부 사정이다 — 사실만 적는다. 내력은 명세 5·9절.
                 st.markdown(
                     f'<div class="dong-name">{nm}</div>'
-                    '<div class="warn">이 경계에 대응하는 지표 행이 없습니다. '
-                    '경계 파일(2023)과 콜 원본의 동 구분이 달라 생긴 공백입니다.</div>',
-                    unsafe_allow_html=True)
+                    '<div class="warn">이 경계에 대응하는 콜 데이터가 없습니다.'
+                    '</div>', unsafe_allow_html=True)
             orphans = poly.attrs.get("orphan_rows", [])
             if orphans:
                 names = " · ".join(o["dong"] for o in orphans)
@@ -1445,10 +1454,8 @@ def render_sim_page() -> None:
                     '<table class="grid"><thead><tr><th>시드</th><th>before</th>'
                     f'<th>after</th><th>개선율</th></tr></thead><tbody>{cells}'
                     '</tbody></table>'
-                    + note_html(
-                        f"시드 간 σ {row['rate_sd']:.3f}%p. 같은 배치안이라도 "
-                        f"배차 순서가 갈리면 이후 궤적이 전부 갈립니다 — 이 "
-                        f"흔들림이 대비 구간의 근거입니다."),
+                    # 흔들림이 무엇인지는 「대비 구간」 물음표가 이미 말한다.
+                    + note_html(f"시드 간 σ {row['rate_sd']:.3f}%p"),
                     unsafe_allow_html=True)
             else:
                 st.markdown(note_html("원값 파일이 없습니다."),
