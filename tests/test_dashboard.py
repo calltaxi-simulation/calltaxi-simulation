@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-"""대시보드 로더 점검 — 사이드바가 읽는 attrs 가 살아 있는가.
+"""대시보드 로더 점검 — 출처의 attrs 가 살아 있는가.
 
 **attrs 는 조용히 사라진다.** pandas `merge` 는 attrs 를 물려주지 않아서,
 로더가 후보에 배정 동을 붙이는 순간 `n_pool`·`n_excluded_indoor_mixed` 가
 날아갔다(KeyError: 'n_pool' — 사이드바 "후보 풀 {n}곳" 문구). 타입 검사에도
-테스트에도 안 걸리고 화면을 켤 때만 터진다. 그래서 여기서 잡는다.
+테스트에도 안 걸리고 화면을 켤 때만 터진다.
+
+그 문구는 08.10 에 걷어냈지만 **검사는 남긴다** — 로더가 출처의 메타데이터를
+잃는 것 자체가 버그이고, 다음에 누가 읽을 때 또 같은 자리에서 터진다.
 """
 import pytest
 
@@ -14,9 +17,8 @@ import dashboard as D   # noqa: E402
 import load             # noqa: E402
 
 
-# 사이드바가 f-string 에서 **직접** 꺼내 쓰는 키들. `.get()` 이 아니라 `[...]`
-# 라서 없으면 곧바로 KeyError 다(dashboard.py 「레이어」 절).
-SIDEBAR_ATTRS = ("n_pool", "n_excluded_indoor_mixed")
+# `load.load_candidates()` 가 담아 주는 값들. merge 를 지나도 살아야 한다.
+SOURCE_ATTRS = ("n_pool", "n_excluded_indoor_mixed")
 
 
 @pytest.fixture(scope="module")
@@ -26,10 +28,10 @@ def cand(data_dir):
     return D.load_candidates.__wrapped__()
 
 
-def test_loader_keeps_the_attrs_the_sidebar_reads(cand):
+def test_loader_keeps_the_source_attrs(cand):
     """merge 뒤에도 원본 attrs 가 남아야 한다 — 이게 KeyError 의 원인이었다."""
-    for key in SIDEBAR_ATTRS:
-        assert key in cand.attrs, f"사이드바가 읽는 attrs 가 사라졌다: {key}"
+    for key in SOURCE_ATTRS:
+        assert key in cand.attrs, f"출처의 attrs 가 사라졌다: {key}"
     assert cand.attrs["n_pool"] == 639
     assert cand.attrs["n_excluded_indoor_mixed"] == 291
     # 로더 자신이 붙이는 값도 함께 있어야 한다(update 가 덮어쓰면 안 된다).
@@ -37,9 +39,9 @@ def test_loader_keeps_the_attrs_the_sidebar_reads(cand):
 
 
 def test_loader_attrs_match_the_source(cand):
-    """대시보드가 말하는 숫자와 load.py 가 말하는 숫자가 같아야 한다."""
+    """대시보드가 들고 있는 숫자와 load.py 가 말하는 숫자가 같아야 한다."""
     src = load.load_candidates()
-    for key in SIDEBAR_ATTRS:
+    for key in SOURCE_ATTRS:
         assert cand.attrs[key] == src.attrs[key]
 
 
@@ -53,11 +55,29 @@ def test_assigned_subset_is_smaller_than_outdoor(cand):
     assert not cand["cand_id"].duplicated().any()
 
 
-def test_sidebar_note_renders_without_keyerror(cand):
-    """실제 문구를 그대로 조립해 본다 — 키가 빠지면 여기서 터진다."""
-    note = (f"후보 풀 {cand.attrs['n_pool']}곳 중 옥외만 쓰는 이유는, "
-            f"옥내·혼합 {cand.attrs['n_excluded_indoor_mixed']}곳이 …")
-    assert "639" in note and "291" in note
+def test_depot_layer_click_changes_nothing(cand):
+    """**차고지 점을 눌러도 지도가 변하지 않아야 한다.**
+
+    `clickmode="event+select"` 라 어느 점을 클릭하면 Plotly 가 나머지 트레이스를
+    '비선택'으로 보고 흐리게 만든다 — 차고지를 눌렀는데 동들이 회색조가 되던
+    것이 이것이다. 트레이스마다 비선택 투명도를 제 값으로 못 박아 막는다.
+
+    차고지는 태그도 `location` 도 없어 클릭 처리기가 그냥 흘린다(아래).
+    """
+    poly = D.resolve_polygons.__wrapped__()
+    for selected in (None, poly.iloc[0]["adm_cd2"]):
+        fig = D.build_map(poly, selected, True, True, D.DEFAULT_METRIC)
+        for tr in fig.data:
+            normal = 1.0 if tr.marker.opacity is None else tr.marker.opacity
+            assert tr.unselected.marker.opacity == normal, (
+                f"{tr.name} 이 선택 때문에 흐려진다")
+
+    dep = [t for t in fig.data if t.name == "차고지"]
+    assert dep, "차고지 레이어가 없다"
+    # 클릭 처리기가 보는 두 갈래 어느 쪽에도 걸리지 않아야 한다
+    assert dep[0].customdata is None, "차고지에 customdata 가 붙으면 후보로 오인된다"
+    assert not hasattr(dep[0], "locations"), "차고지는 코로플레스가 아니다"
+    assert dep[0].hovertemplate, "hover 는 살아 있어야 한다"
 
 
 def test_map_customdata_carries_cand_id(cand):

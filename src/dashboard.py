@@ -187,10 +187,10 @@ def load_candidates() -> pd.DataFrame:
     한 후보가 여러 동에 배정될 수 있어(대체 배정) 배정 동 목록을 함께 붙인다.
     `dong_candidates.csv` 가 없으면 348곳 전체로 물러난다 — 지도가 비는 것보다 낫다.
 
-    **`load.load_candidates()` 의 attrs 를 그대로 물려준다.** 사이드바가
-    `n_pool`·`n_excluded_indoor_mixed` 를 읽는데, `merge` 는 attrs 를 버려서
-    한 번 여기서 잃은 적이 있다(KeyError: 'n_pool'). 아래 `attrs.update` 가
-    그 자리다 — 지우면 사이드바가 다시 죽는다.
+    **`load.load_candidates()` 의 attrs 를 그대로 물려준다.** `merge` 는 attrs 를
+    버린다 — 예전에 사이드바가 `n_pool` 을 읽다가 KeyError 로 죽은 적이 있다.
+    그 문구는 08.10 에 걷어냈지만 `attrs.update` 는 남긴다: 출처의 메타데이터를
+    로더가 조용히 잃는 것 자체가 버그이고, 다음에 누가 읽어도 있어야 한다.
 
     반환: load.load_candidates() 컬럼 + assigned_dongs(문자열), n_assigned_dongs
     """
@@ -628,6 +628,21 @@ def build_map(poly: pd.DataFrame, selected, show_depots: bool,
             hovertemplate="%{hovertext}<extra></extra>", name="차고지",
         ))
 
+    # **선택으로 인한 흐려짐을 끈다.** `clickmode="event+select"` 라 어느 점을
+    # 클릭하면 Plotly 가 나머지 트레이스를 '비선택'으로 보고 흐리게 만든다 —
+    # 차고지 점을 눌렀을 때 동들이 통째로 회색조가 되던 것이 이것이다.
+    # 2페이지의 회색조는 우리가 트레이스를 따로 그려서 내는 것이므로 Plotly 의
+    # 흐려짐은 순전히 군더더기다. 트레이스마다 비선택 투명도를 제 값으로 못 박아
+    # 클릭해도 겉모습이 변하지 않게 한다.
+    #
+    # 차고지는 여기에 더해 **클릭해도 아무 일도 하지 않는다** — 아래 클릭
+    # 처리기가 태그도 location 도 없는 점을 그냥 흘린다. Plotly 에는 트레이스
+    # 단위로 클릭을 끄는 스위치가 없고(`hoverinfo="skip"` 은 hover 까지 죽인다),
+    # 차고지 hover 는 살려 둬야 해서 이렇게 한다.
+    for tr in fig.data:
+        op = tr.marker.opacity
+        tr.unselected = dict(marker=dict(opacity=1.0 if op is None else op))
+
     fig.update_layout(
         map=dict(style=MAP_STYLE, center=MAP_CENTER, zoom=MAP_ZOOM),
         margin=dict(l=0, r=0, t=0, b=0),
@@ -794,14 +809,13 @@ def cand_spec_rows(cand_id: int) -> None:
     available = r["capacity_available"]
     rows = [("면수", f"{int(r['capacity']):,}면"), ("소스", r["source"]),
             ("자치구", r["gu"])]
-    note = "옥외 후보입니다. 시뮬 입력 용량은 이 총 면수입니다."
+    # 면수만 있는 후보에는 주석을 달지 않는다 — 표가 그대로 읽힌다.
+    # 실가용이 붙은 시영 65곳만, 두 숫자가 왜 다른지 설명한다.
+    note = ""
     if pd.notna(available):
         rows.insert(1, ("실가용 면수 (참고)", f"{int(available):,}면"))
-        note = ("옥외 후보입니다. <b>시뮬 입력은 총 면수</b>이고, 실가용 면수는 "
-                "정보공개청구 <b>피크시간 잔여구획</b>의 일별 중앙값 — 그 날 가장 "
-                "붐빈 1시간에 실제로 비어 있던 면입니다. 시영 65곳에만 있어 "
-                "용량으로는 쓰지 않고, 시뮬 뒤 후보를 좁힐 때 참고합니다. "
-                "하루 중 최악값이라 야간 여력은 이보다 큽니다.")
+        note = ("시뮬 입력은 총 면수입니다. 실가용 면수는 피크시간에 실제로 비어 "
+                "있던 면(시영 65곳만)이라 용량으로는 쓰지 않습니다.")
     st.markdown(rows_html(rows) + note_html(note), unsafe_allow_html=True)
 
 
@@ -908,7 +922,7 @@ def dong_panel(row: pd.Series, df: pd.DataFrame) -> None:
             ("기다리다 포기", fmt(pct("cancel_abandoned_ratio"), "%")),
             ("배차 후 미승차", fmt(pct("cancel_after_assign_ratio"), "%")),
             ("판별 불가", fmt(pct("cancel_other_ratio"), "%")),
-        ]) + note_html("기다리다 포기 = 배차 전 1분 초과 취소. 공급 부족의 핵심 신호"),
+        ]) + note_html("기다리다 포기 = 배차 전 1분 초과 취소"),
             unsafe_allow_html=True)
 
     with st.expander("콜 발생"):
@@ -1090,9 +1104,6 @@ def candidate_picker(sb) -> None:
 
     n_weak = int((~g["sample_ok"]).sum())
     sb.markdown(note_html(
-        f"{len(g)}곳 · 개선율과 총절감을 함께 적었습니다 — 두 축은 다른 것을 "
-        f"잽니다(순위 상관 +0.32). <b>순위 번호는 붙이지 않습니다</b>: 대비 구간이 "
-        f"겹치는 후보끼리는 우열을 가릴 수 없습니다.<br>"
         f"※표본부족 <b>{n_weak}곳</b> — 3km 콜 {E.MIN_CALLS_SCOPE:,}건 미만이라 "
         f"개선율이 커 보여도 닿는 사람이 적습니다."), unsafe_allow_html=True)
 
@@ -1116,22 +1127,6 @@ def sidebar(poly: pd.DataFrame) -> None:
         f'<span class="swatch" style="background:{DEPOT_COLOR}"></span>현행 차고지<br>'
         f'<span class="swatch" style="background:{CAND_COLOR}"></span>후보 주차장'
         f'</div>', unsafe_allow_html=True)
-    n_outdoor = cand.attrs.get("n_outdoor", len(cand))
-    assigned_note = (
-        f"옥외 후보 {n_outdoor}곳 중 <b>동에 배정된 {len(cand)}곳</b>만 찍습니다 — "
-        "나머지는 어느 동의 거점도 되지 않아 시뮬에 들어가지 않습니다. "
-        "점을 클릭하면 어느 동에 배정됐는지 나옵니다(한 곳이 여러 동을 맡기도 합니다). "
-        if cand.attrs.get("assigned_only") else
-        "<b>배정 결과 파일이 없어 옥외 후보 전체</b>를 찍습니다 — "
-        "<code>python src/candidates.py</code> 를 돌리면 배정된 곳만 남습니다. ")
-    sb.markdown(note_html(
-        assigned_note +
-        f"후보 풀 {cand.attrs['n_pool']}곳 중 옥외만 쓰는 이유는, "
-        f"옥내·혼합 {cand.attrs['n_excluded_indoor_mixed']}곳이 주차장 진입 "
-        "유효고를 확인할 소스가 없어 리프트 특장차가 들어갈 수 있는지 "
-        "판정할 수 없기 때문입니다(가정 A-15). 목록은 보존돼 있어 전고를 확인하면 "
-        "그대로 되살릴 수 있습니다."), unsafe_allow_html=True)
-
     sb.divider()
     key = st.session_state.metric_key
     spec = METRICS[key]
@@ -1171,16 +1166,8 @@ def sidebar(poly: pd.DataFrame) -> None:
         f'<th>기준</th><th>빨강</th></tr></thead><tbody>{"".join(cells)}</tbody>'
         '</table>', unsafe_allow_html=True)
 
-    if isinstance(spec["fold"], (int, float)):
-        sb.markdown(note_html(
-            f"{fold_s} 미만은 한 색으로 접었습니다. 기관 기준이 아니라 급한 곳만 "
-            "눈에 남기기 위한 장치입니다. 시뮬 before/after 를 같은 자로 읽으려면 "
-            "절대값이어야 합니다."), unsafe_allow_html=True)
-    else:
-        pos = "상위" if spec["worse"] == "high" else "하위"
-        sb.markdown(note_html(
-            f"근거 있는 절대 임계가 없어 <b>{pos} 25%</b>({spec['fold']})를 "
-            "기준선으로 씁니다."), unsafe_allow_html=True)
+    # 기준선을 어떻게 잡았는지는 위 표의 「기준」 열(절대/p75/p25)이 이미 말한다.
+    # 그 아래 붙던 설명 문단은 걷어냈다 — 근거는 명세 4절.
 
     sb.divider()
     candidate_picker(sb)
@@ -1189,9 +1176,8 @@ def sidebar(poly: pd.DataFrame) -> None:
     n_poly, n_col = len(poly), int(poly["has_metrics"].sum())
     sb.markdown(note_html(
         f"데이터 기준 <b>{BASIS}</b><br>"
-        f"경계 {n_poly}개 중 {n_col}개 표시 · 미매칭 {n_poly - n_col}개<br>"
-        "이용률은 방향(높을수록 좋음/나쁨)을 자료로 가릴 수 없어 "
-        "색칠 지표에서 뺐습니다. 패널에는 표시됩니다."), unsafe_allow_html=True)
+        f"경계 {n_poly}개 중 {n_col}개 표시 · 미매칭 {n_poly - n_col}개"),
+        unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1264,6 +1250,7 @@ def main() -> None:
                     ss.page = 3
                     st.rerun()
                 continue
+            # 차고지 점 — 태그도 location 도 없다. 여기서 그냥 흘린다.
             loc = p.get("location")
             if loc and loc != ss.selected:
                 ss.selected = loc
@@ -1273,9 +1260,8 @@ def main() -> None:
     with right:
         if ss.selected is None:
             st.markdown(
-                '<div class="panel">' + note_html(
-                    "동을 클릭하면 세부지표가 여기 나타납니다.<br><br>"
-                    "핵심 5개는 항상 보이고 나머지는 접혀 있습니다.")
+                '<div class="panel">'
+                + note_html("동을 클릭하면 세부지표가 여기 나타납니다.")
                 + '</div>', unsafe_allow_html=True)
         else:
             # 전체보기는 패널 맨 위 — 동 이름 바로 위
@@ -1313,34 +1299,24 @@ def sim_help_panel(row) -> None:
     n_ov = int(row["n_overlap"])
     if n_ov:
         st.markdown(
-            f'<div class="warn"><b>우열을 가릴 수 없는 후보 {n_ov}곳</b><br>'
-            f'대비 구간({row["interval"]})이 이 {n_ov}곳과 겹칩니다. '
-            f'그 안에서는 어느 쪽이 낫다고 말할 수 없습니다 — '
-            f'{"겹침이 이만큼 넓다는 것 자체가 결과입니다." if n_ov >= 100 else "선택은 다른 근거로 하십시오."}'
-            f'</div>', unsafe_allow_html=True)
+            f'<div class="warn">대비 구간이 <b>{n_ov}곳</b>과 겹칩니다. '
+            f'이 안에서는 우열을 가릴 수 없습니다.</div>', unsafe_allow_html=True)
     else:
         st.markdown(
-            '<div class="warn"><b>구간이 겹치는 후보가 없습니다</b><br>'
-            '이 후보는 다른 243곳과 대비 구간이 떨어져 있습니다 — '
-            '드문 경우입니다.</div>', unsafe_allow_html=True)
+            '<div class="warn">대비 구간이 겹치는 후보가 없습니다.</div>',
+            unsafe_allow_html=True)
 
     if not bool(row["sample_ok"]):
         st.markdown(
-            f'<div class="warn"><b>표본 부족</b><br>3km 콜 '
-            f'{int(row["n_calls_scope"]):,}건으로 수혜 범위가 좁습니다'
-            f'(기준 {E.MIN_CALLS_SCOPE:,}건). 개선율이 커 보여도 닿는 사람이 '
-            f'그만큼 적습니다 — 총절감({row["total_delta_min"]:,.0f}분)을 함께 '
-            f'보십시오. 계산에서 뺀 것은 아닙니다.</div>', unsafe_allow_html=True)
+            f'<div class="warn">3km 콜 {int(row["n_calls_scope"]):,}건으로 '
+            f'수혜 범위가 좁습니다.</div>', unsafe_allow_html=True)
 
     st.markdown(note_html(
-        f"<b>절감폭의 절대 크기는 과소평가입니다.</b> 시뮬 픽업 수준이 실측의 "
-        f"{PICKUP_FIDELITY_PCT}%라(A-19·A-20) 여기 나온 분·%도 그만큼 축소돼 "
-        f"있습니다. <b>후보 간 비교로 읽으십시오</b> — 모든 후보가 같은 편의를 "
-        f"겪으므로 상대 비교는 유효합니다."), unsafe_allow_html=True)
-    st.markdown(note_html(
-        f"<b>{SIM_BASIS}</b> 기준({SIM_DAYS}일). 진단 화면의 <b>{BASIS}</b> 값과 "
-        f"다릅니다 — 두 화면의 숫자를 그대로 견주지 마십시오."),
+        "절감폭은 실제보다 작게 나옵니다. 후보 간 비교로 읽으십시오."),
         unsafe_allow_html=True)
+    st.markdown(note_html(
+        f"대표 기간({SIM_START:%Y-%m-%d}~{SIM_END:%m-%d}) 기준입니다. "
+        f"진단 화면의 연간 값과 다릅니다."), unsafe_allow_html=True)
 
 
 def sim_dong_panel(cand_id: int, row) -> None:
@@ -1364,9 +1340,8 @@ def sim_dong_panel(cand_id: int, row) -> None:
         ("영향권 콜", f"{int(row['n_calls_scope']):,}건"),
     ]), unsafe_allow_html=True)
     st.markdown(note_html(
-        "<b>담당 동과 영향권은 다릅니다.</b> 담당은 이 후보를 거점으로 배정받은 "
-        "동이고, 영향권은 거점에서 3km 안에 드는 동 전부입니다 — 개선율은 "
-        "영향권 전체의 콜 가중 평균입니다."), unsafe_allow_html=True)
+        "담당 동은 이 후보를 거점으로 배정받은 동, 영향권은 3km 안의 동 "
+        "전부입니다."), unsafe_allow_html=True)
 
     # 지도에 그려지는 경계 수가 동 수보다 적을 수 있다 — 침묵하면 지도가 거짓말이 된다
     n_un = int(sc.get("n_unmapped", 0))
@@ -1414,12 +1389,13 @@ def render_sim_page() -> None:
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("픽업 개선율", f"{row['rate_pct']:+.2f}%",
-              help="3km 영향권 콜 가중 평균. 값이 음수면 대기가 줄었다는 뜻입니다.")
+              help="3km 안 동네들의 대기가 평균 몇 % 줄어드는지. "
+                   "콜이 많은 동에 더 무게를 둡니다.")
     m2.metric("대비 구간", f"± {row['half']:.2f}%p",
-              help="평균 ± 1.41σ. 신뢰구간이 아니라 두 후보를 가를 수 있는지 "
-                   "보는 폭입니다.")
+              help="시뮬을 세 번 돌렸을 때 값이 흔들린 폭. 두 후보의 구간이 "
+                   "겹치면 어느 쪽이 나은지 알 수 없습니다.")
     m3.metric("총 절감", f"{row['total_delta_min']:,.0f}분",
-              help="영향권 안에서 사라진 총 대기 분 = 분/콜 × 콜수.")
+              help="3km 안에서 줄어든 대기 시간을 전부 더한 값. 한 달 기준입니다.")
     m4.metric("픽업 before → after",
               f"{row['before']:.2f} → {row['after']:.2f}분")
 
@@ -1436,14 +1412,10 @@ def render_sim_page() -> None:
             f'<div class="map-sub">영향권 {drawn}을 한 색으로 칠했습니다 · '
             f'진한 테두리가 담당 동 · 주황 점이 후보 위치</div>',
             unsafe_allow_html=True)
+        # 영향권 안이 한 색인 이유(동별 before/after 가 없다)는 명세 3절에 적어 뒀다.
+        # 화면 문단은 걷어냈다 — 지도 부제의 "한 색으로 칠했습니다"가 사실을 말한다.
         st.plotly_chart(build_sim_map(int(row["cand_id"]), row),
                         width="stretch", key=f"simmap-{int(row['cand_id'])}")
-        st.markdown(note_html(
-            "<b>영향권 안이 한 색인 것은 데이터의 한계입니다.</b> before/after 는 "
-            "3km 범위 전체를 콜 가중 평균한 값 하나이고 동별 값은 산출돼 있지 "
-            "않습니다. 농도를 동마다 다르게 주면 없는 차이를 지어내는 것이 됩니다 — "
-            "이 지도가 답하는 것은 <b>어디까지 닿는가</b>입니다. 농도는 후보끼리 "
-            "비교하십시오(짙을수록 개선율이 큽니다)."), unsafe_allow_html=True)
 
     with right:
         if st.button("← 지도로"):
