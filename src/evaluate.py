@@ -7,6 +7,7 @@ evaluate.py — 배치안 후보 평가
     .venv/Scripts/python.exe src/evaluate.py                      # 1단계 → 2단계 → 등급
     .venv/Scripts/python.exe src/evaluate.py --stage 1            # 1단계만
     .venv/Scripts/python.exe src/evaluate.py --stage 2 --seeds 42,43
+    .venv/Scripts/python.exe src/evaluate.py --stage 2 --all --seeds 43,44
     .venv/Scripts/python.exe src/evaluate.py --grade              # 결과로 등급만
 
 **중간에 끊겨도 이어서 돌린다.** 후보 하나가 끝날 때마다 CSV 에 덧붙이고, 다시
@@ -75,6 +76,11 @@ GRADE_PATH = OUT_DIR / "placement_grades.csv"
 RADIUS_KM = M.SUPPLY_RADIUS_KM
 
 # 2단계 대상 수. **결과를 보기 전에 고정한다** — 보고 정하면 사후 선택이다.
+#
+# **`--all` 을 쓰면 이 컷은 쓰이지 않는다(244곳 전부).** 컷은 성능 때문에 둔
+# 타협이었지 그쪽이 더 옳아서가 아니다 — 대표 기간을 한 달로 잡은 근거가 "성능
+# 제약이 없으니 전부 3회 돌릴 수 있다"였으므로, 상위 50곳만 3회로 두면 그 전제가
+# 무너진다. 전부 돌리면 고를 일이 없어 사후 선택 문제 자체가 사라진다.
 STAGE2_TOP_N = 50
 
 STAGE1_SEEDS = (S.SEED,)
@@ -249,12 +255,29 @@ def stage2_shortlist(results: pd.DataFrame, top_n: int = STAGE2_TOP_N) -> list:
 
     1단계는 시드 1회라 σ 가 없다 — **등급을 매기지 않고 정렬만 한다.**
     컷 N 은 결과를 보기 전에 고정된 값이다(사후 선택 차단).
+
+    **`--all` 로 244곳 전부를 돌면 이 함수는 쓰이지 않는다.** 컷이 없으면 고를
+    일도 없어 사후 선택 문제 자체가 사라진다 — 컷은 성능 때문에 둔 타협이지
+    그쪽이 더 옳아서가 아니었다.
     """
     s1 = results[results["stage"] == 1]
     if s1.empty:
         raise ValueError("1단계 결과가 없다")
     return (s1.groupby("cand_id")["rate_pct"].mean()
               .nsmallest(top_n).index.tolist())
+
+
+def seeds_missing(results: pd.DataFrame, target_ids, seeds) -> list:
+    """대상 후보 중 **하나라도** 빠뜨린 시드. 등급 보류 판정에 쓴다.
+
+    후보별로 따진다 — "어느 한 후보라도 그 시드가 있으면 됐다"로 보면 194곳을
+    이어 돌리는 중간에 등급이 매겨진다.
+    """
+    df = results[results["cand_id"].isin(list(target_ids))]
+    have = df.drop_duplicates(["cand_id", "seed"]).groupby("cand_id")["seed"].agg(set)
+    if len(have) < len(set(target_ids)):
+        return list(seeds)
+    return [s for s in seeds if not all(s in v for v in have)]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -378,14 +401,25 @@ def overlaps(graded: pd.DataFrame, cand_id: int) -> pd.DataFrame:
 
 
 def _grade_labels(n: int) -> list:
-    """등급 이름. 2~3개면 상/중/하, 그 밖은 A/B/C…"""
+    """등급 이름. 2~3개면 상/중/하, 그 밖은 A/B/C… 26개를 넘으면 AA/AB…"""
     if n == 1:
         return ["단일"]
     if n == 2:
         return ["상", "하"]
     if n == 3:
         return ["상", "중", "하"]
-    return [chr(ord("A") + i) for i in range(n)]
+
+    def name(i: int) -> str:
+        # 244곳을 돌리면 등급이 26개를 넘을 수 있다. chr(ord('A')+i) 만 쓰면
+        # 'Z' 를 지나 '[' 같은 문자가 나온다.
+        s = ""
+        while True:
+            s = chr(ord("A") + i % 26) + s
+            i = i // 26 - 1
+            if i < 0:
+                return s
+
+    return [name(i) for i in range(n)]
 
 
 def _cand_line(r) -> str:
@@ -486,6 +520,10 @@ def grade_report(graded: pd.DataFrame) -> str:
 # ─────────────────────────────────────────────────────────────
 
 def main(argv=None):
+    # **파서를 만들기 전에** 인코딩을 잡는다 — 뒤로 미루면 `--help` 가
+    # 콘솔 기본 코드페이지(cp949)로 나가 한글이 깨진다.
+    sys.stdout.reconfigure(encoding="utf-8")
+
     ap = argparse.ArgumentParser(description="배치안 후보 평가(3km 픽업 개선율)")
     ap.add_argument("--stage", type=int, choices=(1, 2), default=None,
                     help="한 단계만 실행. 기본은 1 → 2 연속")
@@ -494,12 +532,13 @@ def main(argv=None):
     ap.add_argument("--seeds", type=str, default=None,
                     help="쉼표로 구분한 시드 목록(예: 42,43). 나눠 돌릴 때 쓴다. "
                          "생략하면 1단계 42 · 2단계 42,43,44")
-    ap.add_argument("--top", type=int, default=STAGE2_TOP_N)
+    ap.add_argument("--top", type=int, default=STAGE2_TOP_N,
+                    help=f"2단계 대상 수(개선율 상위 N). 기본 {STAGE2_TOP_N}")
+    ap.add_argument("--all", action="store_true",
+                    help="2단계를 **후보 전부**로 돌린다(컷 없음). --top 을 무시한다")
     ap.add_argument("--limit", type=int, default=None,
                     help="후보 수 제한(시험용)")
     args = ap.parse_args(argv)
-
-    sys.stdout.reconfigure(encoding="utf-8")
 
     if args.grade:
         graded = assign_grades(load_results())
@@ -534,17 +573,21 @@ def main(argv=None):
 
     if args.stage in (None, 2):
         results = load_results()
-        short = stage2_shortlist(results, args.top)
-        print(f"\n[2단계 대상] 1단계 개선율 상위 {len(short)}곳 "
-              f"(컷 {args.top} 는 사전 고정값)")
+        if args.all:
+            short = cands["cand_id"].tolist()
+            print(f"\n[2단계 대상] **후보 전부 {len(short)}곳** — 컷 없음. "
+                  f"고를 일이 없으니 사후 선택 문제도 없다")
+        else:
+            short = stage2_shortlist(results, args.top)
+            print(f"\n[2단계 대상] 1단계 개선율 상위 {len(short)}곳 "
+                  f"(컷 {args.top} 는 사전 고정값)")
         run_stage(2, cands[cands["cand_id"].isin(short)],
                   picked or STAGE2_SEEDS, **kw)
 
         # 시드를 다 돌리기 전에는 등급을 매기지 않는다 — 반복이 덜 쌓인 σ 로
         # 경계를 가르면 나중에 시드를 채웠을 때 등급이 달라진다.
         results = load_results()
-        have = {int(s) for s in results.loc[results["cand_id"].isin(short), "seed"]}
-        missing = [s for s in STAGE2_SEEDS if s not in have]
+        missing = seeds_missing(results, short, STAGE2_SEEDS)
         if missing:
             print(f"\n[등급 보류] 시드 {missing} 가 아직 없다. 다 돌린 뒤 "
                   f"`--grade` 로 매길 것 — 반복이 덜 쌓인 σ 로 가르면 경계가 흔들린다.")

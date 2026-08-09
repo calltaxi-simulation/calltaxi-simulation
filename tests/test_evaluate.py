@@ -147,6 +147,27 @@ def test_grades_use_stage1_replicate_too():
     assert set(g["n_seed"]) == {3}, "1단계 반복이 빠졌다"
 
 
+def test_seeds_missing_is_per_candidate():
+    """**후보별로** 따져야 한다 — "어느 하나라도 있으면 됐다"로 보면 이어 돌리는
+    중간에 등급이 매겨진다."""
+    # 1 은 42·43·44 를 다 채웠고 2 는 42 뿐이다.
+    df = pd.concat([_rows([(1, [-5.0, -5.1, -4.9])]),
+                    _rows([(2, [-3.0])])], ignore_index=True)
+    assert E.seeds_missing(df, [1], (42, 43, 44)) == []
+    assert E.seeds_missing(df, [1, 2], (42, 43, 44)) == [43, 44]
+    # 결과에 아예 없는 후보가 섞이면 전부 미완으로 본다.
+    assert E.seeds_missing(df, [1, 99], (42, 43, 44)) == [42, 43, 44]
+
+
+def test_grade_labels_survive_past_z():
+    """등급이 26개를 넘어도 이름이 깨지지 않아야 한다 — 244곳이면 가능하다."""
+    labels = E._grade_labels(30)
+    assert len(labels) == len(set(labels)) == 30
+    assert labels[:2] == ["A", "B"] and labels[25] == "Z"
+    assert labels[26] == "AA" and labels[27] == "AB"
+    assert all(c.isalpha() for lab in labels for c in lab)
+
+
 def test_grades_need_two_seeds():
     """σ 를 낼 수 없으면 등급을 매기지 않고 멈춘다 — 조용히 넘기면 안 된다."""
     with pytest.raises(ValueError):
