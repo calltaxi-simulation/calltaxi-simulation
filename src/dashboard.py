@@ -24,8 +24,10 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import evaluate as E  # noqa: E402
 import load  # noqa: E402
 import metrics as M  # noqa: E402
+import simulator as S  # noqa: E402
 
 OUTPUTS = Path(__file__).resolve().parent.parent / "outputs"
 
@@ -68,6 +70,26 @@ CAND_TAG = "cand"
 PANEL_BG = "#FBFAF8"
 
 PERIOD_ORDER = ["심야", "아침", "낮", "저녁"]
+
+# ── 3페이지(시뮬) 전용 ────────────────────────────────────────
+# 개선 농도 램프. 개선율이 클수록 짙다. **한 후보의 지도 안에서는 평평하다** —
+# 후보별 before/after 는 3km 범위 전체의 집계 하나뿐이고 동별로는 없다.
+# 농도는 후보끼리 비교하라고 두는 것이다(build_sim_map 주석 참조).
+IMPROVE_LIGHT = "#D5E3D8"
+IMPROVE_DARK = "#2E5E43"
+OUT_SCOPE = "#E3E1DC"        # 영향권 밖 — 물러나되 사라지지는 않게
+ASSIGNED_LINE = "#1F4230"    # 담당 동 테두리
+
+# 시뮬 화면의 기준 기간. 진단 화면(연간)과 다르다 — 섞어 읽으면 안 되므로
+# **시뮬 상수에서 끌어온다.** 화면에 직접 적으면 대표 기간이 바뀔 때 어긋난다.
+SIM_START = pd.Timestamp(S.REPRESENTATIVE_START)
+SIM_DAYS = S.REPRESENTATIVE_DAYS
+# `pd.Timedelta(days=N)` 는 이 pandas 에서 DeprecationWarning 이다 — 단위를 명시한다.
+SIM_END = SIM_START + pd.Timedelta(SIM_DAYS - 1, unit="D")
+SIM_BASIS = f"대표 기간 {SIM_START:%Y-%m-%d}~{SIM_END:%Y-%m-%d}"
+
+# 픽업 재현 수준(A-19·A-20). 절감폭의 절대 크기가 이만큼 축소돼 있다.
+PICKUP_FIDELITY_PCT = 53
 
 # ─────────────────────────────────────────────────────────────
 # 색칠 지표 — 사이드바에서 고른다.
@@ -193,6 +215,141 @@ def load_candidates() -> pd.DataFrame:
     out.attrs["n_outdoor"] = n_outdoor
     out.attrs["assigned_only"] = True
     return out.reset_index(drop=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# 시뮬 결과 — 3페이지
+# ─────────────────────────────────────────────────────────────
+
+# 화면에 쓰지 않는 열. 등급은 계산만 남기고 표시하지 않기로 했다 —
+# 판단을 대신하는 표시라 도구의 성격과 어긋나고, 244곳에서 [상] 4곳 중 3곳이
+# 표본 부족이라 최고 등급이 가장 좁은 지역을 가리켰다.
+# 근거는 docs/model_flow.md 「등급은 계산하되 표시하지 않는다」.
+REF_PREFIX = "ref_"
+
+
+@st.cache_data(show_spinner=False)
+def load_placement() -> pd.DataFrame:
+    """후보별 시뮬 결과 244행. **`ref_*`(등급) 열은 아예 떨어뜨린다.**
+
+    화면에서 안 쓰는 것으로 충분하지 않다 — 열이 남아 있으면 다음 사람이
+    집어 쓴다. 여기서 자르면 3페이지 코드가 등급에 손댈 방법이 없다.
+
+    반환: cand_id, cand_name, gu, dongs, n_dong_scope, n_calls_scope,
+          before, delta, rate_pct, rate_sd, rate_lo, rate_hi, interval,
+          sample_ok, total_delta_min, n_overlap (+ after 파생)
+    """
+    path = OUTPUTS / "placement_grades.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    g = pd.read_csv(path, encoding="utf-8-sig")
+    g = g[[c for c in g.columns if not c.startswith(REF_PREFIX)]].copy()
+    g["after"] = g["before"] + g["delta"]
+    g["half"] = (g["rate_hi"] - g["rate_lo"]) / 2
+    return g
+
+
+@st.cache_data(show_spinner=False)
+def load_placement_seeds() -> pd.DataFrame:
+    """시드별 원값 732행. 후보 하나의 시드 3회를 그대로 보여줄 때 쓴다.
+
+    평균 하나만 보이면 σ 가 어디서 왔는지 알 수 없다 — 원값 3개를 열어 두면
+    "이 후보는 시드에 따라 이만큼 흔들린다"를 직접 확인할 수 있다.
+    """
+    path = OUTPUTS / "placement_eval.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    ev = pd.read_csv(path, encoding="utf-8-sig")
+    return ev.drop_duplicates(["cand_id", "seed"], keep="first")
+
+
+@st.cache_data(show_spinner=False)
+def placement_scope() -> dict:
+    """후보 → (3km 영향권 폴리곤, 담당 동 폴리곤). 둘 다 adm_cd2 집합이다.
+
+    **영향권은 저장돼 있지 않아 다시 계산한다.** `placement_eval.csv` 에는
+    범위 안 동 **수**(`n_dong_scope`)만 있고 어느 동인지는 없다. `evaluate`
+    의 함수를 그대로 불러 같은 반경·같은 좌표로 다시 잡는다 — 규칙을 여기
+    베껴 쓰면 반경이 바뀔 때 지도와 숫자가 어긋난다. 244곳 전부에서
+    `n_dong_scope` 와 일치하는 것을 확인했다(tests/test_dashboard.py).
+
+    담당 동은 `dong_candidates.csv` 의 배정 결과다. 영향권과 다르다 —
+    영향권은 "3km 안에 드는 동", 담당은 "이 후보를 거점으로 배정받은 동"이다.
+
+    **폴리곤 수는 동 수보다 적을 수 있다.** 경계 파일(2023)과 콜 원본의 동
+    구분이 달라 ⑴ 대응 경계가 없는 지표 행이 7개 있고 ⑵ 개편으로 여러 행이 한
+    경계에 묶인다(신당1~6동 → 신당동 등 4곳). 244곳 중 66곳이 여기 걸린다.
+    그래서 `n_dong`(진짜 영향권 동 수)과 `polys`(그릴 수 있는 경계)를 **따로**
+    돌려준다 — 지도가 17개를 칠하면서 "18개 동"이라고 적으면 안 된다.
+    같은 어긋남을 2페이지는 `orphan_rows` 로 이미 알리고 있다(명세 5·9절).
+
+    반환: {cand_id: {polys, assigned, lat, lon, n_dong, n_unmapped}}
+    """
+    ac = OUTPUTS / "dong_candidates.csv"
+    if not ac.exists():
+        return {}
+    a = pd.read_csv(ac)
+    a = a[a["is_assigned"] & a["cand_id"].notna()]
+
+    # 지표 행 → 폴리곤. resolve_polygons 의 3단 매칭 결과를 거꾸로 뒤집는다.
+    poly = resolve_polygons()
+    metrics_df = load_metrics()
+    key_of = list(zip(metrics_df["gu"], metrics_df["dong_canon"]))
+    codes = poly["adm_cd2"].tolist()
+    poly_of_key: dict = {}
+    for pi, members in enumerate(poly["members"]):
+        for j in members:
+            poly_of_key[key_of[j]] = codes[pi]
+    known = set(codes)
+
+    dong_xy = E.dong_coords()
+    out = {}
+    for cid, grp in a.groupby("cand_id"):
+        r = grp.iloc[0]
+        keys = E.scope_members(float(r["cand_lat"]), float(r["cand_lon"]), dong_xy)
+        polys = {poly_of_key[k] for k in keys if k in poly_of_key}
+        # 담당 동의 adm_cd2 는 int 로 실려 있다 — 경계 쪽은 문자열이다
+        assigned = {str(x) for x in grp["adm_cd2"]} & known
+        out[int(cid)] = {
+            "polys": sorted(polys), "assigned": sorted(assigned),
+            "lat": float(r["cand_lat"]), "lon": float(r["cand_lon"]),
+            "n_dong": len(keys),
+            "n_unmapped": len(keys) - len(polys),
+        }
+    return out
+
+
+def placement_row(cand_id: int):
+    """후보 하나의 결과 행. 없으면 None — 결과가 없는 후보도 지도에는 있다."""
+    g = load_placement()
+    if g.empty:
+        return None
+    hit = g[g["cand_id"] == cand_id]
+    return hit.iloc[0] if len(hit) else None
+
+
+def candidate_options(sort_key: str) -> list:
+    """사이드바 후보 목록 — (cand_id, 표시문자열) 을 정렬해 돌려준다.
+
+    **순위 번호를 붙이지 않는다.** 정렬은 훑어보기 위한 것이지 서열이 아니다 —
+    개선율 1위 마천동1 은 다른 24곳과 대비 구간이 겹쳐 단독 1위라 할 수 없다.
+    번호를 붙이면 그 사실이 지워진다.
+
+    **개선율과 총절감을 라벨에 함께 적는다.** 정렬 키만 보이면 그 축이 유일한
+    기준인 것처럼 읽힌다 — 둘은 순위 상관 +0.32 로 다른 것을 잰다.
+    """
+    g = load_placement()
+    if g.empty:
+        return []
+    col = "total_delta_min" if sort_key == "total" else "rate_pct"
+    g = g.sort_values(col)
+    out = []
+    for r in g.itertuples():
+        flag = "" if r.sample_ok else "  ※표본부족"
+        out.append((int(r.cand_id),
+                    f"{r.cand_name[:22]} ({r.gu}) · {r.rate_pct:+.2f}% · "
+                    f"{r.total_delta_min:,.0f}분{flag}"))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -445,10 +602,13 @@ def build_map(poly: pd.DataFrame, selected, show_depots: bool,
         # 코로플레스 점은 location 을 갖고 이 태그가 없다.
         # 실가용은 시영에만 있다 — 없는 건 -1 로 넘겨 패널에서 행을 뺀다
         # (None 을 섞으면 plotly customdata 가 문자열로 눌린다).
-        cdata = [[CAND_TAG, n, int(c), s, g, -1 if pd.isna(a) else int(a), d]
-                 for n, c, s, g, a, d in zip(
+        # 마지막 칸이 cand_id 다 — 클릭하면 이 값으로 3페이지를 연다.
+        cdata = [[CAND_TAG, n, int(c), s, g, -1 if pd.isna(a) else int(a), d,
+                  int(i)]
+                 for n, c, s, g, a, d, i in zip(
                      cand["name"], cand["capacity"], cand["source"], cand["gu"],
-                     cand["capacity_available"], cand["assigned_dongs"])]
+                     cand["capacity_available"], cand["assigned_dongs"],
+                     cand["cand_id"])]
         fig.add_trace(go.Scattermap(
             lat=cand["lat"], lon=cand["lon"], mode="markers",
             marker=dict(size=7, color=CAND_COLOR),
@@ -482,6 +642,109 @@ def build_map(poly: pd.DataFrame, selected, show_depots: bool,
     return fig
 
 
+def improve_color(rate: float, lo: float, hi: float) -> str:
+    """개선율 → 초록 농도. lo·hi 는 **244곳 전체** 범위다(후보 간 비교용)."""
+    t = 0.0 if hi <= lo else (abs(rate) - lo) / (hi - lo)
+    t = min(max(t, 0.0), 1.0)
+
+    def mix(a: str, b: str) -> str:
+        ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+        cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+        return "#" + "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(ca, cb))
+
+    return mix(IMPROVE_LIGHT, IMPROVE_DARK)
+
+
+def build_sim_map(cand_id: int, row) -> go.Figure:
+    """한 후보의 3km 영향권 지도.
+
+    **색은 후보 하나 안에서 평평하다 — 그게 데이터의 한계다.** `placement_eval.csv`
+    의 before/after 는 3km 범위 **전체를 콜 가중 평균한 값 하나**이고
+    (`evaluate.scope_pickup`), 동별 before/after 는 산출돼 있지 않다. 그래서
+    영향권 동들을 서로 다른 농도로 칠하면 **없는 차이를 지어내는 것**이 된다.
+    한 색으로 칠하고 그 값을 범례에 적는다 — 지도가 답하는 것은 "얼마나
+    줄어드는가"가 아니라 **"어디까지 닿는가"** 다.
+
+    농도는 **후보끼리** 비교하라고 둔다. 244곳의 |개선율| 범위 위에서 잡으므로
+    다른 후보로 넘어가면 진하기가 달라진다.
+
+    담당 동은 테두리로 가른다. 영향권(3km 안)과 담당(거점으로 배정된 동)은
+    다른 개념이고, 한 후보가 최대 5개 동을 맡는다.
+
+    `uirevision` 은 **후보마다 다르다.** "constant" 로 두면 후보를 바꿔도
+    카메라가 그대로라 새 후보가 화면 밖에 있을 수 있다. 같은 후보 안의
+    rerun 에서는 값이 같아 줌·팬이 유지된다.
+    """
+    gj, _ = load_boundary()
+    poly = resolve_polygons()
+    sc = placement_scope().get(cand_id, {})
+    scope_set = set(sc.get("polys", []))
+    assigned_set = set(sc.get("assigned", []))
+    lat, lon = sc.get("lat"), sc.get("lon")
+
+    g = load_placement()
+    lo, hi = g["rate_pct"].abs().min(), g["rate_pct"].abs().max()
+    fill = improve_color(float(row["rate_pct"]), lo, hi)
+
+    locs = poly["adm_cd2"].tolist()
+    names = poly["adm_nm"].tolist()
+    fig = go.Figure()
+
+    # ① 바닥 — 영향권 밖. 빼지 않는다. 구멍이 뚫리면 서울이 아닌 것으로 읽힌다.
+    fig.add_trace(go.Choroplethmap(
+        geojson=gj, locations=locs, z=[0] * len(locs),
+        colorscale=[[0, OUT_SCOPE], [1, OUT_SCOPE]], showscale=False,
+        marker_line_width=0.4, marker_line_color="#CFCCC6",
+        hovertext=names, hovertemplate="%{hovertext}<br>영향권 밖<extra></extra>",
+        name="영향권 밖",
+    ))
+
+    # ② 영향권 — 한 색. 값은 범례에 적는다.
+    rate = float(row["rate_pct"])
+    before, after = float(row["before"]), float(row["after"])
+    z_scope = [0 if loc in scope_set else None for loc in locs]
+    fig.add_trace(go.Choroplethmap(
+        geojson=gj, locations=locs, z=z_scope, zmin=0, zmax=1,
+        colorscale=[[0, fill], [1, fill]], showscale=False,
+        marker_line_width=0.5, marker_line_color="#FFFFFF",
+        marker_opacity=0.92, hovertext=names,
+        hovertemplate=(f"%{{hovertext}}<br>3km 영향권 · 픽업 {before:.2f} → "
+                       f"{after:.2f}분 ({rate:+.2f}%)<extra></extra>"),
+        name="3km 영향권",
+    ))
+
+    # ③ 담당 동 — 테두리만 강하게. 채움은 ②와 같아야 "영향권 안"이 유지된다.
+    if assigned_set:
+        z_as = [0 if loc in assigned_set else None for loc in locs]
+        fig.add_trace(go.Choroplethmap(
+            geojson=gj, locations=locs, z=z_as, zmin=0, zmax=1,
+            colorscale=[[0, fill], [1, fill]], showscale=False,
+            marker_line_width=2.0, marker_line_color=ASSIGNED_LINE,
+            marker_opacity=1.0, hovertext=names,
+            hovertemplate="%{hovertext}<br><b>담당 동</b><extra></extra>",
+            name="담당 동",
+        ))
+
+    # ④ 후보 위치
+    if lat is not None:
+        fig.add_trace(go.Scattermap(
+            lat=[lat], lon=[lon], mode="markers",
+            marker=dict(size=13, color=CAND_COLOR),
+            hovertext=[f"{row['cand_name']} · {row['gu']}"],
+            hovertemplate="%{hovertext}<extra></extra>", name="후보",
+        ))
+
+    center = ({"lat": lat, "lon": lon} if lat is not None else MAP_CENTER)
+    fig.update_layout(
+        map=dict(style=MAP_STYLE, center=center, zoom=11.4),
+        margin=dict(l=0, r=0, t=0, b=0), height=720,
+        uirevision=f"sim-{cand_id}",     # 후보가 바뀌면 카메라를 다시 잡는다
+        transition=dict(duration=400, easing="cubic-in-out"),
+        paper_bgcolor=BG, showlegend=False, font=dict(color=INK),
+    )
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────
 # 패널 조각
 # ─────────────────────────────────────────────────────────────
@@ -511,38 +774,35 @@ def note_html(text: str) -> str:
     return f'<div class="note">{text}</div>' if text else ""
 
 
-def cand_panel(cd: list) -> None:
-    """클릭한 후보 주차장.
-
-    cd 는 지도 customdata —
-    [태그, 이름, 면수, 소스, 자치구, 실가용면수(없으면 -1), 배정 동].
+def cand_spec_rows(cand_id: int) -> None:
+    """후보 제원 — 면수·소스·실가용. 3페이지 「후보 제원」에 접어 둔다.
 
     **면수가 시뮬 입력이고 실가용은 참고값이다.** 실측 잔여면은 시영 65곳에만
     있어서 그것을 용량으로 쓰면 후보 간 비교에서 자가 섞인다. 시영일 때만
     한 줄 더 붙여 "총 면수만 보면 안 된다"를 화면에서 알 수 있게 한다.
 
-    **배정 동을 함께 보인다.** 후보 하나가 여러 동의 거점이 될 수 있고(대체 배정),
-    그 경우 이 한 자리에 배치하면 여러 동이 같이 움직인다 — 클릭했을 때 그
-    사실이 보여야 후보의 무게를 읽을 수 있다.
+    예전에는 지도에서 후보를 클릭했을 때 오른쪽에 뜨는 패널이었다. 후보 클릭이
+    3페이지로 가게 되면서 이리로 옮겼다 — **사이드바 목록으로 들어와도 같은
+    것을 봐야 하므로** 클릭 customdata 가 아니라 cand_id 로 다시 찾는다.
     """
-    _, name, capacity, source, gu, available, dongs = cd
-    rows = [("면수", f"{int(capacity):,}면"), ("소스", source), ("자치구", gu)]
-    if dongs:
-        n = dongs.count("·") + 1
-        rows.append((f"배정 동 ({n})", dongs))
+    cand = load_candidates()
+    hit = cand[cand["cand_id"] == cand_id]
+    if not len(hit):
+        st.markdown(note_html("후보 제원을 찾을 수 없습니다."), unsafe_allow_html=True)
+        return
+    r = hit.iloc[0]
+    available = r["capacity_available"]
+    rows = [("면수", f"{int(r['capacity']):,}면"), ("소스", r["source"]),
+            ("자치구", r["gu"])]
     note = "옥외 후보입니다. 시뮬 입력 용량은 이 총 면수입니다."
-    if available >= 0:
+    if pd.notna(available):
         rows.insert(1, ("실가용 면수 (참고)", f"{int(available):,}면"))
         note = ("옥외 후보입니다. <b>시뮬 입력은 총 면수</b>이고, 실가용 면수는 "
                 "정보공개청구 <b>피크시간 잔여구획</b>의 일별 중앙값 — 그 날 가장 "
                 "붐빈 1시간에 실제로 비어 있던 면입니다. 시영 65곳에만 있어 "
                 "용량으로는 쓰지 않고, 시뮬 뒤 후보를 좁힐 때 참고합니다. "
                 "하루 중 최악값이라 야간 여력은 이보다 큽니다.")
-    st.markdown(
-        '<div class="panel">'
-        f'<div class="dong-name">{name}</div>'
-        + rows_html(rows) + note_html(note)
-        + '</div>', unsafe_allow_html=True)
+    st.markdown(rows_html(rows) + note_html(note), unsafe_allow_html=True)
 
 
 def dong_panel(row: pd.Series, df: pd.DataFrame) -> None:
@@ -794,6 +1054,49 @@ CSS = f"""
 # 사이드바 — 조작·범례·기준 표기를 본문에서 걷어낸다
 # ─────────────────────────────────────────────────────────────
 
+def candidate_picker(sb) -> None:
+    """사이드바 「후보 목록」 — 244곳을 정렬해 훑고 고른다.
+
+    **지도에서 찾아 들어가는 경로만으로는 전체를 훑을 수 없다.** "개선 큰 곳부터
+    보고 싶다"에 답할 자리가 여기다. 지도 클릭은 위치를 알 때, 목록은 모를 때 쓴다.
+
+    정렬 축을 둘 다 두는 이유 — 개선율과 총절감은 순위 상관 +0.32 로 다른 것을
+    잰다(상위 20 중 4곳만 겹친다). 하나만 두면 그 축이 정답인 것처럼 읽힌다.
+    """
+    g = load_placement()
+    sb.markdown('<div class="map-title">후보 목록</div>', unsafe_allow_html=True)
+    if g.empty:
+        sb.markdown(note_html(
+            "시뮬 결과 파일이 없습니다 — <code>python src/evaluate.py</code> 를 "
+            "돌리면 목록이 채워집니다."), unsafe_allow_html=True)
+        return
+
+    sb.radio("정렬", ["rate", "total"],
+             format_func=lambda k: "개선율 순" if k == "rate" else "총절감 순",
+             key="cand_sort", horizontal=True, label_visibility="collapsed")
+
+    opts = candidate_options(st.session_state.cand_sort)
+    ids = [c for c, _ in opts]
+    label_of = dict(opts)
+    cur = st.session_state.get("sim_cand")
+    idx = ids.index(cur) if cur in ids else 0
+
+    sb.selectbox("후보", ids, index=idx, key="cand_pick",
+                 format_func=lambda c: label_of[c], label_visibility="collapsed")
+    if sb.button("이 후보 결과 보기 →"):
+        st.session_state.sim_cand = st.session_state.cand_pick
+        st.session_state.page = 3
+        st.rerun()
+
+    n_weak = int((~g["sample_ok"]).sum())
+    sb.markdown(note_html(
+        f"{len(g)}곳 · 개선율과 총절감을 함께 적었습니다 — 두 축은 다른 것을 "
+        f"잽니다(순위 상관 +0.32). <b>순위 번호는 붙이지 않습니다</b>: 대비 구간이 "
+        f"겹치는 후보끼리는 우열을 가릴 수 없습니다.<br>"
+        f"※표본부족 <b>{n_weak}곳</b> — 3km 콜 {E.MIN_CALLS_SCOPE:,}건 미만이라 "
+        f"개선율이 커 보여도 닿는 사람이 적습니다."), unsafe_allow_html=True)
+
+
 def sidebar(poly: pd.DataFrame) -> None:
     sb = st.sidebar
     sb.markdown('<div class="map-title">색칠 지표</div>', unsafe_allow_html=True)
@@ -880,6 +1183,9 @@ def sidebar(poly: pd.DataFrame) -> None:
             "기준선으로 씁니다."), unsafe_allow_html=True)
 
     sb.divider()
+    candidate_picker(sb)
+
+    sb.divider()
     n_poly, n_col = len(poly), int(poly["has_metrics"].sum())
     sb.markdown(note_html(
         f"데이터 기준 <b>{BASIS}</b><br>"
@@ -902,8 +1208,9 @@ def main() -> None:
     ss.setdefault("selected", None)
     ss.setdefault("show_depots", True)
     ss.setdefault("show_cands", True)
-    ss.setdefault("selected_cand", None)
     ss.setdefault("metric_key", DEFAULT_METRIC)
+    ss.setdefault("sim_cand", None)          # 3페이지가 보는 후보 cand_id
+    ss.setdefault("cand_sort", "rate")
 
     df = load_metrics()
     poly = resolve_polygons()
@@ -946,10 +1253,15 @@ def main() -> None:
             pts = (sel or {}).get("points", []) if sel else []
         for p in pts:
             cd = p.get("customdata")
-            # 후보 점 — 동 선택과 섞이면 안 되므로 태그로 먼저 가른다
-            if isinstance(cd, (list, tuple)) and cd and cd[0] == CAND_TAG:
-                if list(cd) != ss.selected_cand:
-                    ss.selected_cand = list(cd)
+            # 후보 점 — 동 선택과 섞이면 안 되므로 태그로 먼저 가른다.
+            # 후보를 누르면 **3페이지(시뮬 결과)** 로 간다. 예전에는 오른쪽에
+            # 작은 제원 패널만 띄웠는데, 그 내용은 3페이지 「후보 제원」으로
+            # 옮겼다 — 목록으로 들어와도 같은 것을 볼 수 있어야 한다.
+            if isinstance(cd, (list, tuple)) and len(cd) > 7 and cd[0] == CAND_TAG:
+                cid = int(cd[7])
+                if cid != ss.sim_cand or ss.page != 3:
+                    ss.sim_cand = cid
+                    ss.page = 3
                     st.rerun()
                 continue
             loc = p.get("location")
@@ -959,12 +1271,6 @@ def main() -> None:
                 st.rerun()
 
     with right:
-        if ss.selected_cand is not None:
-            cand_panel(ss.selected_cand)
-            if st.button("후보 정보 닫기"):
-                ss.selected_cand = None
-                st.rerun()
-
         if ss.selected is None:
             st.markdown(
                 '<div class="panel">' + note_html(
@@ -998,22 +1304,182 @@ def main() -> None:
             st.markdown('</div>', unsafe_allow_html=True)
 
 
+def sim_help_panel(row) -> None:
+    """해석 도움 — **이 화면에서 하지 말아야 할 읽기**를 먼저 막는다.
+
+    순서에 뜻이 있다. 겹침 → 표본 → 절대크기 → 기준. 앞의 둘은 이 후보에만
+    해당하는 경고이고 뒤의 둘은 어느 후보에나 붙는 상시 주석이다.
+    """
+    n_ov = int(row["n_overlap"])
+    if n_ov:
+        st.markdown(
+            f'<div class="warn"><b>우열을 가릴 수 없는 후보 {n_ov}곳</b><br>'
+            f'대비 구간({row["interval"]})이 이 {n_ov}곳과 겹칩니다. '
+            f'그 안에서는 어느 쪽이 낫다고 말할 수 없습니다 — '
+            f'{"겹침이 이만큼 넓다는 것 자체가 결과입니다." if n_ov >= 100 else "선택은 다른 근거로 하십시오."}'
+            f'</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="warn"><b>구간이 겹치는 후보가 없습니다</b><br>'
+            '이 후보는 다른 243곳과 대비 구간이 떨어져 있습니다 — '
+            '드문 경우입니다.</div>', unsafe_allow_html=True)
+
+    if not bool(row["sample_ok"]):
+        st.markdown(
+            f'<div class="warn"><b>표본 부족</b><br>3km 콜 '
+            f'{int(row["n_calls_scope"]):,}건으로 수혜 범위가 좁습니다'
+            f'(기준 {E.MIN_CALLS_SCOPE:,}건). 개선율이 커 보여도 닿는 사람이 '
+            f'그만큼 적습니다 — 총절감({row["total_delta_min"]:,.0f}분)을 함께 '
+            f'보십시오. 계산에서 뺀 것은 아닙니다.</div>', unsafe_allow_html=True)
+
+    st.markdown(note_html(
+        f"<b>절감폭의 절대 크기는 과소평가입니다.</b> 시뮬 픽업 수준이 실측의 "
+        f"{PICKUP_FIDELITY_PCT}%라(A-19·A-20) 여기 나온 분·%도 그만큼 축소돼 "
+        f"있습니다. <b>후보 간 비교로 읽으십시오</b> — 모든 후보가 같은 편의를 "
+        f"겪으므로 상대 비교는 유효합니다."), unsafe_allow_html=True)
+    st.markdown(note_html(
+        f"<b>{SIM_BASIS}</b> 기준({SIM_DAYS}일). 진단 화면의 <b>{BASIS}</b> 값과 "
+        f"다릅니다 — 두 화면의 숫자를 그대로 견주지 마십시오."),
+        unsafe_allow_html=True)
+
+
+def sim_dong_panel(cand_id: int, row) -> None:
+    """담당 동 목록 + 영향권 규모.
+
+    **한 후보가 여러 동을 맡는다(최대 5개).** 어느 동들인지 적지 않으면
+    A동에서 클릭한 후보와 B동에서 클릭한 후보가 같을 때 혼란이 생긴다.
+    """
+    dongs = [d for d in str(row["dongs"]).split(" · ") if d]
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(f'<div class="dong-name">담당 동 {len(dongs)}개</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="dong-sub">이 후보를 거점으로 배정받은 동</div>',
+                unsafe_allow_html=True)
+    st.markdown(rows_html([(f"{i}", d) for i, d in enumerate(dongs, 1)]),
+                unsafe_allow_html=True)
+
+    sc = placement_scope().get(cand_id, {})
+    st.markdown(rows_html([
+        ("3km 영향권", f"{int(row['n_dong_scope'])}개 동"),
+        ("영향권 콜", f"{int(row['n_calls_scope']):,}건"),
+    ]), unsafe_allow_html=True)
+    st.markdown(note_html(
+        "<b>담당 동과 영향권은 다릅니다.</b> 담당은 이 후보를 거점으로 배정받은 "
+        "동이고, 영향권은 거점에서 3km 안에 드는 동 전부입니다 — 개선율은 "
+        "영향권 전체의 콜 가중 평균입니다."), unsafe_allow_html=True)
+
+    # 지도에 그려지는 경계 수가 동 수보다 적을 수 있다 — 침묵하면 지도가 거짓말이 된다
+    n_un = int(sc.get("n_unmapped", 0))
+    if n_un:
+        st.markdown(note_html(
+            f"지도에는 <b>{len(sc['polys'])}개 경계</b>로 그려집니다. "
+            f"{n_un}개 동은 경계 파일(2023)과 콜 원본의 동 구분이 달라 "
+            f"합쳐졌거나 대응 경계가 없습니다 — 개선율 계산에는 "
+            f"{int(row['n_dong_scope'])}개 동이 다 들어가 있습니다."),
+            unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def render_sim_page() -> None:
+    ss = st.session_state
     st.markdown(f'<div class="app-title">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="app-sub">배치안 시뮬레이션 · 구현 예정</div>',
+    st.markdown(f'<div class="app-sub">배치안 시뮬레이션 · {SIM_BASIS}</div>',
+                unsafe_allow_html=True)
+
+    candidate_picker(st.sidebar)
+    st.sidebar.divider()
+    if st.sidebar.button("← 지도로 돌아가기"):
+        ss.page = 2 if ss.selected else 1
+        st.rerun()
+
+    row = placement_row(ss.sim_cand) if ss.sim_cand is not None else None
+    if row is None:
+        st.markdown(
+            '<div class="panel"><div class="warn"><b>결과가 없습니다</b><br>'
+            '이 후보의 시뮬 결과가 <code>outputs/placement_grades.csv</code> 에 '
+            '없습니다. <code>python src/evaluate.py</code> 로 244곳을 돌린 뒤 다시 '
+            '보십시오.</div></div>', unsafe_allow_html=True)
+        if st.button("← 지도로"):
+            ss.page = 2 if ss.selected else 1
+            st.rerun()
+        return
+
+    # ── 후보 정보
+    st.markdown(f'<div class="dong-name">{row["cand_name"]} ({row["gu"]})</div>',
                 unsafe_allow_html=True)
     st.markdown(
-        '<div class="panel">'
-        '<div class="warn"><b>구현 예정</b><br>거점 배치안을 넣고 대기 개선폭을 '
-        '보는 화면입니다. 시뮬 엔진(<code>simulator.py</code>)이 아직 미구현입니다.</div>'
-        + note_html(
-            "이 화면만 <b>대표 기간</b> 기준이 됩니다. 나머지 화면은 2025년 연간 "
-            "기준입니다. 대표 기간은 연간 평균 대기(40.8분)와 가장 가까운 구간으로 "
-            "고르며, 결과를 보기 전에 고정합니다(가정 A-03).")
-        + '</div>', unsafe_allow_html=True)
-    if st.button("← 지도로"):
-        st.session_state.page = 2 if st.session_state.selected else 1
-        st.rerun()
+        f'<div class="dong-sub">콜 {int(row["n_calls_scope"]):,}건 · '
+        f'동 {int(row["n_dong_scope"])}개 · '
+        f'총절감 {row["total_delta_min"]:,.0f}분</div>', unsafe_allow_html=True)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("픽업 개선율", f"{row['rate_pct']:+.2f}%",
+              help="3km 영향권 콜 가중 평균. 값이 음수면 대기가 줄었다는 뜻입니다.")
+    m2.metric("대비 구간", f"± {row['half']:.2f}%p",
+              help="평균 ± 1.41σ. 신뢰구간이 아니라 두 후보를 가를 수 있는지 "
+                   "보는 폭입니다.")
+    m3.metric("총 절감", f"{row['total_delta_min']:,.0f}분",
+              help="영향권 안에서 사라진 총 대기 분 = 분/콜 × 콜수.")
+    m4.metric("픽업 before → after",
+              f"{row['before']:.2f} → {row['after']:.2f}분")
+
+    left, right = st.columns([4, 1], gap="medium")
+
+    with left:
+        sc = placement_scope().get(int(row["cand_id"]), {})
+        n_poly, n_un = len(sc.get("polys", [])), int(sc.get("n_unmapped", 0))
+        drawn = (f'{int(row["n_dong_scope"])}개 동' if not n_un
+                 else f'{int(row["n_dong_scope"])}개 동(경계 {n_poly}개)')
+        st.markdown('<div class="map-title">3km 영향권</div>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="map-sub">영향권 {drawn}을 한 색으로 칠했습니다 · '
+            f'진한 테두리가 담당 동 · 주황 점이 후보 위치</div>',
+            unsafe_allow_html=True)
+        st.plotly_chart(build_sim_map(int(row["cand_id"]), row),
+                        width="stretch", key=f"simmap-{int(row['cand_id'])}")
+        st.markdown(note_html(
+            "<b>영향권 안이 한 색인 것은 데이터의 한계입니다.</b> before/after 는 "
+            "3km 범위 전체를 콜 가중 평균한 값 하나이고 동별 값은 산출돼 있지 "
+            "않습니다. 농도를 동마다 다르게 주면 없는 차이를 지어내는 것이 됩니다 — "
+            "이 지도가 답하는 것은 <b>어디까지 닿는가</b>입니다. 농도는 후보끼리 "
+            "비교하십시오(짙을수록 개선율이 큽니다)."), unsafe_allow_html=True)
+
+    with right:
+        if st.button("← 지도로"):
+            ss.page = 2 if ss.selected else 1
+            st.rerun()
+
+        sim_dong_panel(int(row["cand_id"]), row)
+
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown('<div class="dong-name">해석 도움</div>', unsafe_allow_html=True)
+        sim_help_panel(row)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        with st.expander("후보 제원"):
+            cand_spec_rows(int(row["cand_id"]))
+
+        with st.expander("시드 3회 원값"):
+            ev = load_placement_seeds()
+            sub = ev[ev["cand_id"] == row["cand_id"]].sort_values("seed")
+            if len(sub):
+                cells = "".join(
+                    f'<tr><th>{int(s.seed)}</th><td>{s.before:.2f}</td>'
+                    f'<td>{s.after:.2f}</td><td>{s.rate_pct:+.2f}%</td></tr>'
+                    for s in sub.itertuples())
+                st.markdown(
+                    '<table class="grid"><thead><tr><th>시드</th><th>before</th>'
+                    f'<th>after</th><th>개선율</th></tr></thead><tbody>{cells}'
+                    '</tbody></table>'
+                    + note_html(
+                        f"시드 간 σ {row['rate_sd']:.3f}%p. 같은 배치안이라도 "
+                        f"배차 순서가 갈리면 이후 궤적이 전부 갈립니다 — 이 "
+                        f"흔들림이 대비 구간의 근거입니다."),
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(note_html("원값 파일이 없습니다."),
+                            unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
