@@ -17,14 +17,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import evaluate as E   # noqa: E402
 
 
-def _rows(spec, stage=2):
+def _rows(spec, stage=2, calls=4000):
     """(cand_id, [시드별 개선율]) → 결과 CSV 형식 행들."""
     out = []
     for cid, rates in spec:
         for seed, r in enumerate(rates, start=42):
             out.append({"stage": stage, "cand_id": cid, "cand_name": f"c{cid}",
                         "gu": "종로구", "dongs": "종로구 사직동", "capacity": 10,
-                        "seed": seed, "n_dong_scope": 20, "n_calls_scope": 4000,
+                        "seed": seed, "n_dong_scope": 20, "n_calls_scope": calls,
                         "before": 14.0, "after": 14.0 * (1 + r / 100),
                         "delta": 14.0 * r / 100, "rate_pct": r, "elapsed_s": 50.0})
     return pd.DataFrame(out, columns=E._COLUMNS)
@@ -170,6 +170,111 @@ def test_grade_report_carries_the_warnings():
     txt = E.grade_report(g)
     assert "우열을 가릴 수 없다" in txt
     assert "과소평가" in txt
+
+
+# ─────────────────────────────────────────────────────────────
+# 대비 구간 — 등급이 뭉쳐도 읽을 수 있어야 한다
+# ─────────────────────────────────────────────────────────────
+
+def test_interval_non_overlap_matches_grade_split():
+    """**구간이 겹친다 == 같은 등급이다.** 이게 어긋나면 표와 등급이 따로 논다.
+
+    σ 가 같은 두 후보를 문턱 바로 아래·바로 위로 놓고 양쪽을 확인한다.
+    폭 배수를 손대면 여기서 잡힌다.
+    """
+    sd = 0.1                       # [-r-sd, -r, -r+sd] 로 만드는 표준편차
+    thr = E.GRADE_SIGMA_K * np.sqrt(2) * sd
+
+    for factor, want_split in ((0.8, False), (1.2, True)):
+        gap = thr * factor
+        g = E.assign_grades(_rows([
+            (1, [-5.0 - sd, -5.0, -5.0 + sd]),
+            (2, [-5.0 + gap - sd, -5.0 + gap, -5.0 + gap + sd]),
+        ]))
+        split = g["grade"].nunique() == 2
+        lo, hi = g.iloc[0], g.iloc[1]
+        overlap = lo["rate_hi"] >= hi["rate_lo"]
+        assert split == want_split
+        assert overlap == (not want_split), "구간 겹침과 등급 분리가 어긋난다"
+
+
+def test_interval_half_width_is_derived_from_grade_k():
+    """반폭은 k/√2·σ 다 — 새 규칙이 아니라 등급 규칙에서 유도한 값."""
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.2, -0.8])]))
+    half = (g["rate_hi"] - g["rate_lo"]) / 2
+    assert np.allclose(half, E.GRADE_SIGMA_K / np.sqrt(2) * g["rate_sd"])
+
+
+def test_report_says_when_everything_merges():
+    """등급이 1개면 **'뭉쳤다'를 명시**해야 한다 — 침묵하면 '다 똑같다'로 읽힌다."""
+    g = E.assign_grades(_rows([(1, [-5.0, -5.4, -4.6]), (2, [-4.9, -5.3, -4.5]),
+                               (3, [-4.8, -5.2, -4.4])]))
+    assert g["grade"].nunique() == 1
+    txt = E.grade_report(g)
+    assert "하나로 뭉쳤다" in txt
+    assert "대비 구간으로 읽을 것" in txt
+
+
+def test_overlaps_lists_the_indistinguishable():
+    """`overlaps` 는 구간이 겹치는 후보를 전부(자기 포함) 돌려준다."""
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-5.05, -5.15, -4.95]),
+                               (3, [-1.0, -1.1, -0.9])]))
+    got = set(E.overlaps(g, 1)["cand_id"])
+    assert got == {1, 2}, "멀리 떨어진 3 이 끼거나 가까운 2 가 빠졌다"
+
+
+# ─────────────────────────────────────────────────────────────
+# 표본 부족 표시
+# ─────────────────────────────────────────────────────────────
+
+def test_thin_scope_is_flagged_but_not_dropped():
+    """콜이 기준 미만이면 표시만 한다. **계산에서 빼면 안 된다.**"""
+    thin = _rows([(1, [-9.0, -9.2, -8.8])], calls=E.MIN_CALLS_SCOPE - 1)
+    thick = _rows([(2, [-3.0, -3.2, -2.8])], calls=E.MIN_CALLS_SCOPE)
+    g = E.assign_grades(pd.concat([thin, thick], ignore_index=True))
+
+    assert len(g) == 2, "표본 부족 후보가 표에서 빠졌다"
+    flag = dict(zip(g["cand_id"], g["sample_ok"]))
+    assert flag[1] is False or flag[1] == False   # noqa: E712
+    assert flag[2] is True or flag[2] == True     # noqa: E712
+    assert "표본 부족" in E.grade_report(g)
+
+
+# ─────────────────────────────────────────────────────────────
+# 수혜 규모 병기
+# ─────────────────────────────────────────────────────────────
+
+def test_total_minutes_is_delta_times_calls():
+    """총 절감 분은 임의 가중 복합 지표가 아니라 분/콜 × 콜수 다."""
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9])], calls=3000))
+    assert np.allclose(g["total_delta_min"], g["delta"] * 3000)
+
+
+def test_narrow_scope_wins_on_rate_but_loses_on_scale():
+    """**개선율 1위와 총절감 1위가 갈리는 것을 표가 드러내야 한다.**
+
+    좁은 범위(콜 800)의 큰 개선율 vs 넓은 범위(콜 8000)의 작은 개선율.
+    개선율로는 앞이, 총절감으로는 뒤가 이긴다 — 그게 병기하는 이유다.
+    """
+    narrow = _rows([(1, [-9.0, -9.2, -8.8])], calls=800)
+    wide = _rows([(2, [-2.0, -2.2, -1.8])], calls=8000)
+    g = E.assign_grades(pd.concat([narrow, wide], ignore_index=True))
+
+    assert g.iloc[0]["cand_id"] == 1, "정렬은 개선율 기준이어야 한다"
+    best_total = g.nsmallest(1, "total_delta_min")["cand_id"].iloc[0]
+    assert best_total == 2, "총절감으로는 넓은 범위가 앞서야 한다"
+    assert dict(zip(g["cand_id"], g["rank_rate"]))[1] == 1
+    assert dict(zip(g["cand_id"], g["rank_total"]))[2] == 1
+
+
+def test_report_shows_scale_beside_rate():
+    """후보 줄에 개선율과 함께 콜수·총절감이 나와야 한다 — 따로 찾게 두면 안 본다."""
+    g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.2, -0.8])],
+                              calls=3000))
+    txt = E.grade_report(g)
+    assert "콜  3,000" in txt or "콜 3,000" in txt
+    assert "총 절감 분 상위" in txt
+    assert "반대 방향으로 오독된다" in txt
 
 
 # ─────────────────────────────────────────────────────────────

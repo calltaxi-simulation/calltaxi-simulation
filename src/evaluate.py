@@ -36,7 +36,12 @@ evaluate.py — 배치안 후보 평가
 달라, 절대 Δ 로 비교하면 원래 픽업이 긴 지역이 자동으로 유리해진다 — 그건 거점
 효과가 아니라 출발점 차이다. 절대 Δ 는 병기한다.
 
-**결과는 순위가 아니라 등급이다.** `assign_grades` 참조.
+**결과는 순위가 아니라 등급이다.** `assign_grades` 참조. 등급은 인접 간격만 보므로
+후보가 촘촘하면 **하나로 뭉칠 수 있다** — 그때를 위해 후보별 **대비 구간**을 함께
+낸다("−4.50% ± 0.72%p"). 구간이 겹치면 우열을 못 가리고, 안 겹치면 가릴 수 있다.
+
+**3km 콜이 적은 후보는 「표본 부족」으로 표시한다**(`MIN_CALLS_SCOPE`). 범위가
+좁으면 개선율이 커 보이지만 혜택이 닿는 사람이 적다. 계산에서 빼지는 않는다.
 """
 from __future__ import annotations
 
@@ -71,6 +76,26 @@ STAGE2_SEEDS = (42, 43, 44)
 
 # 등급 경계 — 인접 후보 간 차이가 이 배수의 σ 이상이면 등급을 가른다.
 GRADE_SIGMA_K = 2.0
+
+# 대비 구간의 반폭 배수. **등급 규칙에서 유도한 값이지 새 규칙이 아니다.**
+# 두 구간이 안 겹칠 조건은 `gap ≥ c(σᵢ+σⱼ)`, 등급이 갈릴 조건은
+# `gap ≥ k·√(σᵢ²+σⱼ²)` 다. σᵢ=σⱼ 일 때 둘이 같아지는 c 는 k/√2 = 1.414 이다.
+# 이 값을 쓰면 **"구간이 겹친다" 와 "같은 등급이다" 가 같은 말이 된다** — 표에서
+# 눈으로 읽은 것과 등급이 어긋나지 않는다. k 를 바꾸면 여기도 따라 바뀐다.
+COMPARISON_K = GRADE_SIGMA_K / 2 ** 0.5
+
+# 3km 범위 콜이 이보다 적으면 **표본 부족**으로 표시한다(계산에서 빼지는 않는다).
+# 유도 — 3km 를 택한 근거가 콜 4,427건에서 신호/잡음 2.55 였다. 잡음이 √n 로
+# 줄면 S/N ∝ √n 이므로 S/N 을 1.7(2.55 의 2/3) 위로 두려면
+# 4,427 × (1.7/2.55)² ≈ 1,967 건이 필요하다.
+#
+# **다만 이 유도의 전제(콜이 모이면 잡음이 준다)는 아직 확인되지 않았다.** 시드
+# 2회로 잰 σ 는 콜수와 상관이 거의 없었다(log-log +0.09). 시드 변동이 범위 안
+# 표본오차가 아니라 시뮬 전체의 시드 동역학에서 오는 것으로 보인다. 그렇다면
+# 이 표시의 실제 의미는 잡음이 아니라 **수혜 규모**다 — 동 2개·콜 666건에 걸린
+# 개선율과 동 30개·콜 6,000건에 걸린 개선율은 같은 무게로 읽을 수 없다.
+# 시드 3회가 쌓이면 σ 와 콜수의 관계를 다시 볼 것.
+MIN_CALLS_SCOPE = 2000
 
 
 # ─────────────────────────────────────────────────────────────
@@ -253,11 +278,24 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
     된 후보는 1단계에서 돈 시드도 반복으로 함께 센다 — 같은 배치·같은 시드라
     결과가 같고, 버리면 σ 의 표본이 3에서 2로 준다.
 
+    **등급이 하나로 뭉칠 수 있다 — 그건 결함이 아니라 결과다.** 이 규칙은 인접
+    간격만 본다. 후보들이 촘촘히 깔리면 양 끝이 크게 벌어져 있어도 중간에 σ 만 한
+    빈틈이 없어 한 등급이 된다. 그때 "구분이 안 된다"가 정직한 보고다. 그래서
+    등급과 **함께 후보별 대비 구간을 낸다** — 등급이 하나여도 양 끝처럼 구간이
+    안 겹치는 쌍은 우열을 말할 수 있고, 실무자가 표에서 직접 읽는다.
+
     한계: σ 를 3개 표본에서 추정하므로 σ 자체가 흔들린다. 등급 경계가 한두
     후보 차이로 달라질 수 있으니 경계 근처는 같은 등급으로 읽는 편이 안전하다.
 
-    반환: cand_id, cand_name, gu, dongs, n_seed, before, delta, rate_pct,
-          rate_sd, grade, gap_prev, threshold_prev
+    **개선율과 수혜 규모를 함께 낸다.** 개선율만으로 정렬하면 범위가 좁은 후보가
+    위를 차지한다 — 3km 안 콜이 666건인 곳의 −9.6% 와 6,000건인 곳의 −3% 는 같은
+    무게가 아니다. `total_delta_min`(= delta × 콜수, 범위 안에서 사라진 총 대기
+    분)과 `n_calls_scope` 를 나란히 두어 한눈에 보이게 했다. 정렬은 개선율 그대로다.
+
+    반환: cand_id, cand_name, gu, dongs, n_seed, n_dong_scope, n_calls_scope,
+          before, delta, rate_pct, rate_sd, rate_lo, rate_hi, interval,
+          sample_ok, total_delta_min, rank_rate, rank_total, grade,
+          gap_prev, threshold_prev
     """
     cids = results.loc[results["stage"] == stage, "cand_id"].unique()
     if len(cids) == 0:
@@ -296,7 +334,41 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
     labels = _grade_labels(cur + 1)
     g["grade"] = [labels[x] for x in grade]
     g["gap_prev"], g["threshold_prev"] = gap, thr
+
+    half = COMPARISON_K * g["rate_sd"]
+    g["rate_lo"], g["rate_hi"] = g["rate_pct"] - half, g["rate_pct"] + half
+    g["interval"] = [f"{r:+.2f}% ± {h:.2f}%p" for r, h in zip(g["rate_pct"], half)]
+    g["sample_ok"] = g["n_calls_scope"] >= MIN_CALLS_SCOPE
+
+    # **수혜 규모.** 개선율은 출발점 픽업으로만 정규화해 "몇 사람에게 닿는가"를
+    # 담지 않는다. 범위가 좁은 후보가 개선율만으로 위에 오는 것을 막으려면 규모를
+    # 같이 봐야 한다. total_delta_min 은 임의 가중의 복합 지표가 아니라 **범위
+    # 안에서 실제로 사라진 총 대기 분**이다(분/콜 × 콜수). 단위가 있다.
+    #
+    # **그렇다고 이걸로 정렬하지 않는다.** 편향이 반대로 걸릴 뿐이다 — 도심
+    # 후보는 콜이 많아 개선율이 낮아도 총 절감이 크게 나온다. 어느 한쪽을 주
+    # 정렬로 삼으면 반드시 그 방향으로 오독된다. **둘을 나란히 두고 읽는다.**
+    # 정렬 키가 개선율인 것은 2단계 컷과 등급 규칙이 그 기준으로 사전 고정돼
+    # 있기 때문이다 — 지금 바꾸면 사후 선택이 된다.
+    g["total_delta_min"] = g["delta"] * g["n_calls_scope"]
+    g["rank_rate"] = g["rate_pct"].rank(method="min").astype(int)
+    g["rank_total"] = g["total_delta_min"].rank(method="min").astype(int)
     return g
+
+
+def overlaps(graded: pd.DataFrame, cand_id: int) -> pd.DataFrame:
+    """한 후보와 **대비 구간이 겹치는** 후보들 — "얘랑 얘는 못 가린다"를 뽑는다.
+
+    등급이 하나로 뭉쳤을 때 이게 실질적인 읽기 도구다. 겹치지 않는 후보와는
+    우열을 말할 수 있다.
+    """
+    row = graded.loc[graded["cand_id"] == cand_id]
+    if row.empty:
+        raise ValueError(f"cand {cand_id} 가 등급표에 없다")
+    lo, hi = float(row["rate_lo"].iloc[0]), float(row["rate_hi"].iloc[0])
+    hit = (graded["rate_lo"] <= hi) & (graded["rate_hi"] >= lo)
+    return graded.loc[hit, ["cand_id", "cand_name", "gu", "interval",
+                            "grade", "sample_ok"]]
 
 
 def _grade_labels(n: int) -> list:
@@ -310,22 +382,93 @@ def _grade_labels(n: int) -> list:
     return [chr(ord("A") + i) for i in range(n)]
 
 
+def _cand_line(r) -> str:
+    """후보 한 줄 — **개선율과 수혜 규모를 한 줄에 나란히.**
+
+    개선율만 보이면 범위가 좁은 후보가 위를 차지한 것을 알아채지 못한다.
+    콜수와 총 절감 분을 같은 줄에 두어 눈이 함께 가게 한다.
+    """
+    flag = "" if r.sample_ok else " ※표본부족"
+    return (f"      {r.cand_id:>4} {r.cand_name[:18]:<20} {r.interval:>17} │ "
+            f"콜 {r.n_calls_scope:>6,} · 동 {r.n_dong_scope:>2} · "
+            f"총 {r.total_delta_min:>+7,.0f}분{flag}")
+
+
 def grade_report(graded: pd.DataFrame) -> str:
-    """등급별 요약 문장. **순위로 읽지 말라**를 함께 낸다."""
+    """등급별 요약 문장. **순위로 읽지 말라**와 **대비 구간**을 함께 낸다."""
+    n_grade = graded["grade"].nunique()
     lines = []
+
+    if n_grade == 1:
+        lines.append(f"  [등급 1개] {len(graded)}곳이 **하나로 뭉쳤다.** "
+                     "인접 후보의 차이가 어디서도 문턱을 넘지 못했다는 뜻이지,")
+        lines.append("     후보들이 다 똑같다는 뜻이 아니다 — 양 끝은 "
+                     f"{graded['rate_pct'].min():+.2f}% 와 "
+                     f"{graded['rate_pct'].max():+.2f}% 로 "
+                     f"{abs(graded['rate_pct'].max() - graded['rate_pct'].min()):.2f}%p "
+                     "벌어져 있다.")
+        lines.append("     **아래 대비 구간으로 읽을 것.** 구간이 안 겹치는 쌍은 "
+                     "우열을 말할 수 있다.")
+        lines.append("")
+
     for name, gg in graded.groupby("grade", sort=False):
         lines.append(
             f"  [{name}] {len(gg)}곳 · 개선율 {gg['rate_pct'].min():+.2f} ~ "
             f"{gg['rate_pct'].max():+.2f}% · 절대 Δ {gg['delta'].mean():+.3f}분")
         for r in gg.head(5).itertuples():
-            lines.append(f"      {r.cand_id:>4} {r.cand_name[:20]:<22} "
-                         f"{r.rate_pct:+.2f}% (σ {r.rate_sd:.2f}) {r.gu}")
+            lines.append(_cand_line(r))
         if len(gg) > 5:
             lines.append(f"      … 외 {len(gg) - 5}곳")
+
+    # 최상위 후보가 몇 곳과 겹치는가 — "1위"를 말할 수 있는지의 답이다.
+    best = graded.iloc[0]
+    n_ov = int(((graded["rate_lo"] <= best["rate_hi"])
+                & (graded["rate_hi"] >= best["rate_lo"])).sum()) - 1
+    lines.append("")
+    lines.append(f"  ▸ 개선율 1위 {best['cand_name'][:20]}({int(best['cand_id'])}) "
+                 f"{best['interval']} 는 **다른 {n_ov}곳과 구간이 겹친다** — "
+                 f"{'단독 1위라 말할 수 없다.' if n_ov else '겹치는 후보가 없다.'}")
+
+    weak = graded.loc[~graded["sample_ok"]]
+    if len(weak):
+        top10 = graded.head(10)
+        n_weak_top = int((~top10["sample_ok"]).sum())
+        lines.append("")
+        lines.append(f"  ▸ **표본 부족 {len(weak)}곳** (3km 콜 < "
+                     f"{MIN_CALLS_SCOPE:,}건) — 개선율 상위 10 중 "
+                     f"**{n_weak_top}곳**이 여기 걸린다:")
+        for r in weak.itertuples():
+            lines.append(_cand_line(r))
+        lines.append("     범위가 좁아 개선율이 커 보이지만 혜택이 닿는 사람이 "
+                     "그만큼 적다. 계산에서 뺀 것은 아니다.")
+
+    # ── 두 번째 시선: 총 절감 분. **정렬을 갈아치우는 게 아니라 병기다.**
+    lines.append("")
+    lines.append("  ▸ **총 절감 분 상위 10** — 같은 결과를 수혜 규모로 본 것이다"
+                 "(순위표가 아니라 대조용):")
+    for r in graded.nsmallest(10, "total_delta_min").itertuples():
+        lines.append(_cand_line(r))
+
+    n = len(graded)
+    top_r = set(graded.nsmallest(min(10, n), "rate_pct")["cand_id"])
+    top_t = set(graded.nsmallest(min(10, n), "total_delta_min")["cand_id"])
+    lines.append(f"     개선율 상위 10 과 총절감 상위 10 이 겹치는 곳: "
+                 f"**{len(top_r & top_t)}곳**. "
+                 f"순위 상관 {graded['rank_rate'].corr(graded['rank_total'], method='spearman'):+.2f}")
+    lines.append("     **둘 중 하나로 정렬하면 반대 방향으로 오독된다** — 개선율은 "
+                 "범위가 좁은 곳을, 총절감은 콜이")
+    lines.append("     많은 도심을 위로 올린다. 표의 정렬이 개선율인 것은 2단계 "
+                 "컷과 등급 규칙이 그 기준으로")
+    lines.append("     사전 고정돼 있기 때문이지, 그쪽이 더 옳아서가 아니다.")
+
     lines.append("")
     lines.append("  ※ **등급 안에서는 우열을 가릴 수 없다.** 인접 후보의 차이가 "
                  f"{GRADE_SIGMA_K}σ 에 못 미쳐 같은 등급으로 묶은 것이므로,")
     lines.append("     같은 등급의 목록 순서를 순위로 읽으면 안 된다.")
+    lines.append(f"  ※ **대비 구간은 신뢰구간이 아니다.** 평균 ± {COMPARISON_K:.2f}σ "
+                 "로, 두 구간이 겹치지 않는 것과 등급이 갈리는 것이")
+    lines.append("     같은 말이 되도록 맞춘 폭이다(등급 규칙에서 유도). "
+                 "95% 같은 신뢰수준을 뜻하지 않는다 — σ 는 rate_sd 열에 따로 있다.")
     lines.append("  ※ **절감폭의 절대 크기는 과소평가다.** 시뮬 픽업 수준이 실측의 "
                  "53%라(A-19·A-20) 여기 나온 값도")
     lines.append("     그만큼 축소돼 있다. 실제 절감은 더 클 가능성이 높다.")
