@@ -165,6 +165,11 @@ def load_candidates() -> pd.DataFrame:
     한 후보가 여러 동에 배정될 수 있어(대체 배정) 배정 동 목록을 함께 붙인다.
     `dong_candidates.csv` 가 없으면 348곳 전체로 물러난다 — 지도가 비는 것보다 낫다.
 
+    **`load.load_candidates()` 의 attrs 를 그대로 물려준다.** 사이드바가
+    `n_pool`·`n_excluded_indoor_mixed` 를 읽는데, `merge` 는 attrs 를 버려서
+    한 번 여기서 잃은 적이 있다(KeyError: 'n_pool'). 아래 `attrs.update` 가
+    그 자리다 — 지우면 사이드바가 다시 죽는다.
+
     반환: load.load_candidates() 컬럼 + assigned_dongs(문자열), n_assigned_dongs
     """
     cand = load.load_candidates()
@@ -184,6 +189,7 @@ def load_candidates() -> pd.DataFrame:
 
     n_outdoor = len(cand)
     out = cand.merge(per, left_on="cand_id", right_index=True, how="inner")
+    out.attrs.update(cand.attrs)          # merge 가 버린 원본 attrs 를 되살린다
     out.attrs["n_outdoor"] = n_outdoor
     out.attrs["assigned_only"] = True
     return out.reset_index(drop=True)
