@@ -254,29 +254,90 @@ def test_fleet_effect_matches_the_simulator():
         assert got["changed"] == 0, "기존 거점 배분이 바뀌면 '그대로입니다'가 거짓이다"
 
 
-def test_position_pct_is_not_a_rank():
-    """백분위는 '대략 어디쯤'이다 — 양 끝에서 0%/100% 로 접히면 안 된다."""
-    v = np.linspace(-8.0, -1.0, 200)
-    assert D._position_pct(v, -8.0) == "0.0"       # 소수로 낸다(「약 0%」 방지)
-    assert D._position_pct(v, -1.0) in ("99", "100")
-    mid = D._position_pct(v, -4.5)
-    assert 45 <= float(mid) <= 55
+def test_position_text_never_prints_a_lying_percent():
+    """양 끝에서 **백분율이 거짓말을 한다** — 그 구간만 말로 바꾼다.
+
+    0% 는 "아무것도 아닌 건가"로 읽히고, 100% 는 **최대치로 읽혀 뜻이 정반대로
+    전달된다**(실제로는 개선이 가장 작은 쪽 끝이다). 둘 다 화면에 나가면 안 된다.
+    """
+    import re
+    plain = lambda s: re.sub(r"<[^>]+>", "", s)  # noqa: E731 — 굵게 표시를 걷어낸다
+    v = np.linspace(-8.0, -1.0, 244)
+
+    best = plain(D._position_text(v, -8.0, "개선"))
+    worst = plain(D._position_text(v, -1.0, "개선"))
+    assert best == "개선이 가장 큰 쪽 끝입니다"
+    assert worst == "개선이 가장 작은 쪽 끝입니다"
+    assert "%" not in best and "%" not in worst
+
+    # 사이는 백분율 그대로. 0%·100% 는 어디서도 나오지 않는다
+    for cur in v:
+        t = plain(D._position_text(v, float(cur), "개선"))
+        assert "약 0%" not in t and "약 100%" not in t
+    assert "약 50% 지점" in plain(D._position_text(v, float(np.median(v)), "개선"))
+
+
+def test_subject_particle_matches_the_final_consonant():
+    """「수혜이」 같은 조사가 화면에 나가지 않는다 — 받침으로 갈린다."""
+    assert D._subject("개선") == "개선이"      # 받침 ㄴ
+    assert D._subject("수혜") == "수혜가"      # 받침 없음
+    assert D._subject("절감") == "절감이"
+    assert D._subject("대기") == "대기가"
+    assert D._subject("A") == "A이"            # 한글이 아니면 조용히 넘어간다
 
 
 def test_distribution_marker_sits_on_the_candidate(placement):
     """표식이 그 후보의 값에 찍히고, **순위 번호는 어디에도 없다.**"""
     rate = placement["rate_pct"].to_numpy(float)
     cur = float(placement.sort_values("rate_pct").iloc[3]["rate_pct"])
-    fig = D._dist_fig(rate, cur, ".1f")
+    fig = D._dist_fig(rate, cur, D._label_pct)
 
     lines = [s for s in fig.layout.shapes if s.type == "line"]
     assert len(lines) == 1 and lines[0].x0 == pytest.approx(cur)
-    texts = [a.text for a in fig.layout.annotations]
-    assert texts == ["이 후보"], "순위·등수 표기가 붙으면 안 된다"
-    assert not any(ch.isdigit() for ch in "".join(texts))
-    # 축은 최소한만 — y축은 통째로 지운다(도수는 세는 값이 아니라 모양이다)
+    marker = [a for a in fig.layout.annotations if a.yanchor == "bottom"]
+    assert [a.text for a in marker] == ["이 후보"], "순위·등수 표기가 붙으면 안 된다"
+    # y축은 통째로 지운다 — 도수는 세는 값이 아니라 모양이다
     assert fig.layout.yaxis.visible is False
-    assert len(fig.layout.xaxis.tickvals) == 2
+
+
+def test_both_distributions_label_their_ends(placement):
+    """**두 차트 모두** 양 끝 값을 보인다 — 축이 없으면 분포의 폭을 모른다.
+
+    총절감만 축이 사라졌던 원인은 눈금이 값에 **가운데 정렬**돼 넓은 라벨
+    (`-2,954`)이 2px 여백에서 잘렸기 때문이다. 안쪽 정렬 주석으로 바꿨으니
+    **폭과 무관하게** 두 끝이 남아야 한다.
+    """
+    rate = placement["rate_pct"].to_numpy(float)
+    total = placement["total_delta_min"].to_numpy(float)
+    scale = float(np.abs(total).max()) >= 1000
+
+    for values, label in ((rate, D._label_pct),
+                          (total, lambda v: D._label_min(v, scale))):
+        fig = D._dist_fig(values, float(np.median(values)), label)
+        ends = [a for a in fig.layout.annotations if a.yanchor == "top"]
+        assert len(ends) == 2, "양 끝 라벨이 둘 다 있어야 한다"
+        assert [a.xanchor for a in ends] == ["left", "right"], \
+            "안쪽 정렬이 아니면 좁은 여백에서 잘린다"
+        assert ends[0].x == pytest.approx(values.min())
+        assert ends[1].x == pytest.approx(values.max())
+        assert all(a.text.strip() for a in ends)
+        # 눈금은 끄고 주석만 쓴다 — 둘 다 켜면 라벨이 겹친다
+        assert fig.layout.xaxis.showticklabels is False
+        # 라벨이 앉을 아래 여백이 있어야 한다
+        assert fig.layout.margin.b >= 14
+
+
+def test_minute_labels_shrink_but_keep_one_unit():
+    """네 자리 분은 천 단위로 줄이고, **양 끝의 단위를 섞지 않는다.**
+
+    한쪽만 천 단위면 폭을 눈으로 견줄 수 없다. 세 자리면 그대로가 더 읽기 쉽다.
+    """
+    assert D._label_min(-2954.4, True) == "-3.0천분"
+    assert D._label_min(-704.8, True) == "-0.7천분"      # 섞지 않는다
+    assert D._label_min(-704.8, False) == "-705분"
+    # 사이드바 폭 기준 — 축약본이 원본보다 짧아야 의미가 있다
+    assert len(D._label_min(-2954.4, True)) < len(D._label_min(-2954.4, False))
+    assert D._label_pct(-8.57) == "-8.6%"
 
 
 def _shown_strings(func_name: str = None) -> list:

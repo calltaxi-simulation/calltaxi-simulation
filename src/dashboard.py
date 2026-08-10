@@ -1184,7 +1184,20 @@ DIST_H = 104
 DIST_BINS = 34
 
 
-def _dist_fig(values: np.ndarray, cur: float, tick_fmt: str) -> go.Figure:
+def _label_pct(v: float) -> str:
+    return f"{v:+.1f}%"
+
+
+def _label_min(v: float, scale: bool) -> str:
+    """총절감(분) 축 라벨. 사이드바 폭이 좁아 네 자리를 그대로 못 쓴다.
+
+    `-2,954` 는 6글자라 축 양 끝에서 잘린다. 천 단위로 줄이면 `-3.0천분` 4~5글자다.
+    **양 끝의 단위를 섞지 않는다** — 한쪽만 천 단위면 폭을 눈으로 견줄 수 없다.
+    """
+    return f"{v / 1000:+.1f}천분" if scale else f"{v:+,.0f}분"
+
+
+def _dist_fig(values: np.ndarray, cur: float, label) -> go.Figure:
     """분포 하나 + 현재 후보 표식. **순위 번호를 붙이지 않는다.**
 
     대비 구간이 겹치는 후보끼리는 우열을 가릴 수 없다는 원칙이 여기서도 유지돼야
@@ -1193,6 +1206,15 @@ def _dist_fig(values: np.ndarray, cur: float, tick_fmt: str) -> go.Figure:
     **두 지표 모두 음수이고 작을수록 좋다**(개선율 −8.57% · 총절감 −2,954분).
     그래서 축 방향을 따로 뒤집을 일이 없다 — 오름차순이 곧 좋은 쪽 → 나쁜 쪽이고,
     두 그림의 방향이 저절로 맞는다.
+
+    **양 끝 값은 눈금이 아니라 주석으로 찍는다.** 눈금은 값에 **가운데 정렬**돼
+    라벨의 절반이 그림 밖으로 나가는데, 좌우 여백이 2px 이라 거기서 잘린다.
+    폭이 좁은 라벨(`-8.6`)은 살아남고 넓은 라벨(`-2,954`)은 통째로 사라져 **총절감
+    차트만 축이 없었다.** 주석을 안쪽으로 정렬하면(왼쪽 끝은 `left`, 오른쪽 끝은
+    `right`) 폭과 무관하게 그림 안에 들어온다.
+
+    **축이 없으면 분포의 폭을 알 수 없다** — 표식이 "어디쯤"만 말하고 "얼마나
+    차이 나는지"는 못 말한다. 두 지표를 함께 보는 화면이라 폭이 보여야 한다.
     """
     fig = go.Figure(go.Histogram(
         x=values, nbinsx=DIST_BINS, marker_color="#D8D4CC",
@@ -1200,26 +1222,58 @@ def _dist_fig(values: np.ndarray, cur: float, tick_fmt: str) -> go.Figure:
     fig.add_vline(x=cur, line_color=IMPROVE_DARK, line_width=2)
     fig.add_annotation(x=cur, y=1, yref="paper", text="이 후보", showarrow=False,
                        yanchor="bottom", font=dict(size=9, color=IMPROVE_DARK))
-    fig.update_xaxes(tickvals=[float(np.min(values)), float(np.max(values))],
-                     tickformat=tick_fmt,
-                     tickfont=dict(size=9, color="#9A968D"),
-                     showgrid=False, zeroline=False)
+
+    lo, hi = float(np.min(values)), float(np.max(values))
+    for x, anchor in ((lo, "left"), (hi, "right")):
+        fig.add_annotation(x=x, y=0, yref="paper", text=label(x), showarrow=False,
+                           xanchor=anchor, yanchor="top", yshift=-3,
+                           font=dict(size=9, color="#9A968D"))
+
+    fig.update_xaxes(showticklabels=False, ticks="", showgrid=False, zeroline=False)
     fig.update_yaxes(visible=False)
-    fig.update_layout(height=DIST_H, margin=dict(l=2, r=2, t=14, b=2),
+    # 아래 여백은 양 끝 라벨이 앉을 자리다 — 2px 이면 라벨이 잘린다.
+    fig.update_layout(height=DIST_H, margin=dict(l=2, r=2, t=14, b=18),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                       bargap=0.06, showlegend=False)
     return fig
 
 
-def _position_pct(values: np.ndarray, cur: float) -> str:
-    """분포에서 '좋은 쪽으로부터' 몇 % 지점인가. **등수가 아니다.**
+def _subject(noun: str) -> str:
+    """주격 조사를 붙인다 — 받침이 있으면 '이', 없으면 '가'.
 
-    양 끝 후보는 0.4% 같은 값이 나오는데 `:.0f` 로 접으면 "약 0% 지점"이 되어
-    읽는 사람이 무슨 말인지 알 수 없다. 1% 미만은 소수 한 자리로 낸다.
+    「수혜이」처럼 틀린 조사가 화면에 나가는 것을 막는다. 한글 음절은
+    `(코드 − 0xAC00) % 28` 이 0 이 아니면 받침이 있다. 한글이 아니면 '이'로 둔다
+    (숫자·영문 지표명이 들어올 일은 없지만 조용히 깨지지는 않게).
+    """
+    ch = ord(noun[-1]) - 0xAC00
+    return noun + ("이" if not 0 <= ch < 11172 or ch % 28 else "가")
+
+
+def _position_text(values: np.ndarray, cur: float, noun: str) -> str:
+    """분포에서 '좋은 쪽으로부터' 어디쯤인가. **등수가 아니다.**
+
+    **양 끝에서는 백분율이 거짓말을 한다.** 개선이 가장 큰 후보는 0% 가 되어
+    "아무것도 아닌 건가"로 읽히고, 개선이 가장 작은 후보는 100% 가 되어 **최대치로
+    읽힌다 — 뜻이 정반대로 전달된다.** 축이 '좋은 쪽에서부터'라는 것을 모르면
+    큰 숫자가 좋아 보이기 때문이다.
+
+    **규칙은 "반올림한 숫자가 거짓말을 하면 말로 바꾼다"** 하나다. 0 이나 100 으로
+    떨어지는 구간에서만 「가장 ~ 쪽 끝」으로 적고, 그 사이는 백분율 그대로 낸다.
+    문턱을 따로 정하지 않아 표기 정밀도와 어긋날 일이 없다.
+
+    **등수를 말하는 것이 아니다.** 244곳에서 0 으로 떨어지는 것은 한두 곳이라
+    그 후보들이 「가장 큰 쪽 끝」을 함께 쓴다 — 끝에 있다는 사실만 말하고 그들
+    사이의 순서는 말하지 않는다. 대비 구간이 겹치는 후보끼리 우열을 가릴 수 없다는
+    원칙과 같은 방향이다. 히스토그램의 표식이 이미 같은 것을 보여 준다.
     """
     v = np.asarray(values, dtype=float)
-    pct = float((v < cur).mean()) * 100
-    return f"{pct:.1f}" if pct < 1 else f"{pct:.0f}"
+    pct = round(float((v < cur).mean()) * 100)
+    subj = _subject(noun)
+    if pct <= 0:
+        return f"{subj} 가장 큰 쪽 끝입니다"
+    if pct >= 100:
+        return f"{subj} 가장 작은 쪽 끝입니다"
+    return f"{subj} 큰 쪽에서 약 <b>{pct}%</b> 지점"
 
 
 def distribution_panel(sb, row) -> None:
@@ -1248,10 +1302,9 @@ def distribution_panel(sb, row) -> None:
 
     # 역할 표기는 본문 색, 뒤따르는 백분위는 회색 — 색으로 위계를 가른다.
     sb.markdown(role_html("<b>개선율</b> — 이 지역이 얼마나 좋아지나")
-                + note_html(f"개선이 큰 쪽에서 약 "
-                            f"<b>{_position_pct(rate, cur_r)}%</b> 지점"),
+                + note_html(_position_text(rate, cur_r, "개선")),
                 unsafe_allow_html=True)
-    sb.plotly_chart(_dist_fig(rate, cur_r, ".1f"),
+    sb.plotly_chart(_dist_fig(rate, cur_r, _label_pct),
                     width="stretch", config={"displayModeBar": False},
                     key=f"dist-rate-{int(row['cand_id'])}")
     sb.markdown(note_html(
@@ -1260,10 +1313,11 @@ def distribution_panel(sb, row) -> None:
         unsafe_allow_html=True)
 
     sb.markdown(role_html("<b>총절감</b> — 몇 사람에게 닿나")
-                + note_html(f"수혜가 큰 쪽에서 약 "
-                            f"<b>{_position_pct(total, cur_t)}%</b> 지점"),
+                + note_html(_position_text(total, cur_t, "수혜")),
                 unsafe_allow_html=True)
-    sb.plotly_chart(_dist_fig(total, cur_t, ",.0f"),
+    # 천 단위 축약은 값이 네 자리를 넘을 때만 — 세 자리면 그대로가 더 읽기 쉽다
+    scale = float(np.abs(total).max()) >= 1000
+    sb.plotly_chart(_dist_fig(total, cur_t, lambda v: _label_min(v, scale)),
                     width="stretch", config={"displayModeBar": False},
                     key=f"dist-total-{int(row['cand_id'])}")
 
