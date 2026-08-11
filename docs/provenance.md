@@ -43,7 +43,7 @@ cd simulation
 
 ---
 
-## 1. 실측 진단 6개 (`metrics.overall_metrics` × `compare_to_target`)
+## 1. 실측 진단 6개 (`metrics.overall_metrics`)
 
 **모집단은 특장차 한정이다(A-16).** 콜 원본은 `calls_2025_replay.csv` 이고,
 원본 명세에서 흡수한 사실은 [calibration.md](calibration.md) 첫 절에 있다.
