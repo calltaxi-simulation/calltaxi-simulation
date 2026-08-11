@@ -142,7 +142,7 @@ simulation/
 │  ├ sensitivity.py  # 가정 민감도(A-01·A-17·A-18 — 대표 9곳 × 설정 6개)
 │  └ dashboard.py    # Streamlit 대시보드(진단 + 후보 결과)
 ├ docs/
-│  ├ assa_log.md         # 가정 대장(A-01~A-16) — 가정 부호의 정본
+│  ├ assa_log.md         # 가정 대장(A-01~A-20) — 가정 부호의 정본
 │  ├ calibration.md      # 정본 — 모듈별 필터·지표 정의·타깃 근거·한계
 │  ├ provenance.md       # 산출값 대장(스크립트를 돌려 얻은 현재 값)
 │  ├ model_flow.md       # 시뮬 설계 — 흐름도·조 편성·엔진·난수
