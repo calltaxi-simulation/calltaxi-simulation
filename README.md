@@ -112,7 +112,6 @@ python src/evaluate.py
 
 # 가정 민감도 (A-01·A-17·A-18 — 대표 후보 9곳 × 설정 6개 → 순위 상관)
 python src/sensitivity.py
-python src/sensitivity.py --report    # 재생 없이 보고만
 
 # 대시보드 (진단 화면 + 후보 결과)
 streamlit run src/dashboard.py
