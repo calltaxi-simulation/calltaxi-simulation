@@ -92,7 +92,7 @@ REFERENCE_TARGETS = {
 
 # A-12(정의는 docs/assa_log.md): 콜수가 적은 동은 평균이 크게 흔들려 지니를 왜곡한다.
 # 100건 미만 제외.
-# 원본 분석도 같은 기준이라 432개 동 중 2개(창신제3동 95건, 반포본동 24건)가 빠진다.
+# 원본 분석도 같은 기준이라 432개 동 중 2개(창신제3동 74건, 반포본동 24건)가 빠진다.
 # 동별 표에서는 버리지 않고 is_reliable=False 로 표시만 한다.
 MIN_CALLS_PER_DONG = 100
 
@@ -525,8 +525,9 @@ def build_dong_table(calls: pd.DataFrame, *, depots: pd.DataFrame = None,
         tbl = tbl.merge(part, on=["gu", "dong_canon"], how="left")
 
     # 신뢰 기준은 지니와 같은 분모로 잰다 — 승차 완료 건이지 접수 건이 아니다.
-    # 접수 기준으로 재면 창신제3동(접수 125 / 승차 95)처럼 지니에서는 빠진 동이
+    # 접수 기준으로 재면 창신제3동(접수 102 / 승차 74)처럼 지니에서는 빠진 동이
     # 표에서는 신뢰로 잡혀 두 지표의 모집단이 어긋난다.
+    # 접수 102 가 문턱 100 을 2건 넘긴 것이라, 원본이 조금만 바뀌면 이 예시는 사라진다.
     tbl["is_reliable"] = tbl["n_served"].fillna(0) >= min_calls
 
     if depots is not None:
