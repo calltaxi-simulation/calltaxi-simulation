@@ -218,5 +218,5 @@ simulation/
 콜 ID 기반 스트림 분리(splitmix64)로 인내심·즉시취소·배차후취소를 가른다 —
 배치안이 바뀌어도 같은 콜은 같은 값을 받는다.
 라이브러리 버전은 requirements.txt 관리. 시드·설정을 바꾸면 기록한다.
-결과는 outputs/ 에 저장하며, `placement_eval.csv` 는 (후보, 시드) 단위로
+결과는 outputs/ 에 저장하며, `placement_eval.csv`와 `sensitivity_eval.csv` 는 (후보, 시드) 단위로
 append 되어 중단·재개가 가능하다.
