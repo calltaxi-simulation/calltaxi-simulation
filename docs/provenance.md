@@ -26,9 +26,12 @@
 cd simulation
 .venv\Scripts\python.exe src/load.py          # 데이터 로딩·필터·좌표매칭 요약
 .venv\Scripts\python.exe src/travel_time.py   # 이동시간 테이블·커버율·오차
-.venv\Scripts\python.exe src/metrics.py       # 동별 지표 산출 + 검증 6개 대조
+.venv\Scripts\python.exe src/metrics.py       # 동별 지표 산출 + 검증 대조
 .venv\Scripts\python.exe src/idle.py          # 유휴 구간 건수·분포·시간대별 동시 유휴
 .venv\Scripts\python.exe src/candidates.py    # 동별 후보 배정(규칙별 동 수·보류 목록)
+.venv\Scripts\python.exe src/patience.py      # 인내심 KM 곡선
+.venv\Scripts\python.exe src/evaluate.py      # 후보 244곳 평가
+.venv\Scripts\python.exe src/sensitivity.py   # 가정 민감도
 ```
 
 실행 환경은 `simulation/.venv` 다(전역 파이썬 아님). 검증된 버전 조합은
