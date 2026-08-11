@@ -59,6 +59,12 @@ docs/model_flow.md 「등급은 계산하되 표시하지 않는다」 절.
 **절감폭의 절대 크기는 양방향 편의를 안고 있다.** 매칭·배차 미재현(A-19·A-20)은
 절감을 줄이는 쪽이고, θ 를 두지 않은 것(A-01)은 늘리는 쪽이다. 두 편의가 상쇄되는
 크기를 알 수 없으므로 **절대값을 인용하지 말고 후보 간 비교로만 읽는다.**
+
+**총 대기(접수 → 승차)도 함께 기록하되 참고 열이다**(`rate_total_pct`).
+판정·정렬·2단계 컷은 픽업 그대로다 — 총 대기 개선율이 픽업보다 크게 나오지만
+(대표 3곳에서 1.3~2.2배) 보기 좋다고 기준을 옮기면 결과를 보고 규칙을 바꾸는
+것이 된다. 매칭을 재현하지 않으므로(A-19) 총 대기 절대값은 실측의 0.33~0.44배라
+**분 단위로 인용할 수 없고**, 후보 간 비교로만 읽는다.
 """
 from __future__ import annotations
 
@@ -182,19 +188,69 @@ def scope_pickup(log: pd.DataFrame, members: set) -> tuple[float, int]:
     return float(d.loc[hit, "_p"].mean()), int(hit.sum())
 
 
+def scope_wait_total(log: pd.DataFrame, members: set) -> tuple[float, int]:
+    """범위 안 콜의 **총 대기**(접수 → 승차) 평균과 승차 건수. 콜 가중이다.
+
+    **픽업과 분모가 다르다.** 픽업은 배차 기록이 있는 콜, 총 대기는 승차까지 간
+    콜(`wait_min` 이 있는 콜)이다. 거점을 놓으면 포기가 줄어 승차 건수가 늘고,
+    **새로 타는 콜은 원래 오래 기다리던 건**이라 after 평균을 끌어올린다. 그래서
+    이 지표의 Δ 는 보수적이다 — 그 크기를 재 두려고 승차 건수도 함께 돌려준다.
+
+    **참고 열이다.** 매칭을 재현하지 않으므로(A-19) 총 대기 절대값이 실측의
+    0.33~0.44배라 분 단위로 인용할 수 없다. 판정·정렬은 픽업 그대로 둔다.
+    """
+    key = pd.MultiIndex.from_arrays([log["origin_gu"].astype(str),
+                                     log["origin_dong_canon"].astype(str)])
+    w = log.loc[key.isin(members), "wait_min"]
+    return float(w.mean()), int(w.notna().sum())
+
+
 # ─────────────────────────────────────────────────────────────
 # 실행 — 중간 저장 · 이어 돌리기
 # ─────────────────────────────────────────────────────────────
 
+# 총 대기 6열은 픽업 뒤에 둔다 — 왼쪽부터 읽으면 판정 지표(픽업)가 먼저 오고
+# 참고 지표가 뒤따른다. `n_boarded_*` 는 후보별 승차 건수 before/after 로,
+# 「포기가 줄어 after 평균이 올라간다」는 통로의 크기를 CSV 에서 확인하는 열이다.
 _COLUMNS = ["stage", "cand_id", "cand_name", "gu", "dongs", "capacity", "seed",
             "n_dong_scope", "n_calls_scope", "before", "after", "delta",
-            "rate_pct", "elapsed_s"]
+            "rate_pct", "before_total", "after_total", "delta_total",
+            "rate_total_pct", "n_boarded_before", "n_boarded_after",
+            "elapsed_s"]
 
 
 def load_results(path: Path = RESULT_PATH) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=_COLUMNS)
-    return pd.read_csv(path, encoding="utf-8-sig")
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    # 열이 늘기 전에 만든 파일도 읽는다 — 없는 열은 NaN 으로 채우고, 그 행을
+    # 어떻게 다룰지는 `run_stage`(다시 돌린다)와 `assign_grades`(뒤로 보낸다)가
+    # 각자 정한다. 여기서 지우면 이어 돌리기가 이유 없이 처음부터가 된다.
+    miss = [c for c in _COLUMNS if c not in df.columns]
+    return df.assign(**{c: np.nan for c in miss}) if miss else df
+
+
+def _ensure_columns(path: Path = RESULT_PATH) -> None:
+    """옛 결과 파일에 **늘어난 열을 빈 값으로 채워 넣는다.**
+
+    헤더가 14열인데 20열짜리 행을 덧붙이면 CSV 가 어긋난 채로 남아 다음 실행이
+    아예 읽지 못한다(`ParserError`). 열만 맞춰 두면 이어 돌리기는 그대로 살고,
+    값이 빈 행은 `run_stage` 가 안 끝난 것으로 보고 다시 돌린다.
+
+    **값은 손대지 않는다** — 옛 행을 지우거나 고치지 않고 폭만 맞춘다.
+    """
+    if not path.exists():
+        return
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    if list(df.columns) == _COLUMNS:
+        return
+    extra = [c for c in df.columns if c not in _COLUMNS]
+    if extra:
+        raise ValueError(f"{path.name} 에 모르는 열이 있다: {extra} — 사람이 볼 것")
+    miss = [c for c in _COLUMNS if c not in df.columns]
+    print(f"  [열 맞춤] {path.name} 에 빈 열 {len(miss)}개 추가: {', '.join(miss)}")
+    df.assign(**{c: np.nan for c in miss})[_COLUMNS].to_csv(
+        path, index=False, encoding="utf-8-sig")
 
 
 def _append(row: dict, path: Path = RESULT_PATH):
@@ -216,7 +272,12 @@ def run_stage(stage: int, cands: pd.DataFrame, seeds, *, calls, depots, mx,
     before 는 시드마다 한 번만 돌리고 메모리에 들고 있는다 — 후보마다 범위가
     달라 집계는 다시 하지만, 재생 자체는 배치안이 같으면 같은 결과다.
     """
+    _ensure_columns(path)
     done = load_results(path)
+    # **열이 늘기 전에 돌린 행은 안 끝난 것으로 본다.** 총 대기 열이 비어 있는데
+    # 건너뛰면 그 (후보, 시드) 만 새 열이 NaN 인 채 남아 조용히 집계로 들어간다.
+    if "before_total" in done.columns:
+        done = done[done["before_total"].notna()]
     have = set(zip(done.get("cand_id", []), done.get("seed", [])))
 
     baseline: dict[int, pd.DataFrame] = {}
@@ -240,6 +301,9 @@ def run_stage(stage: int, cands: pd.DataFrame, seeds, *, calls, depots, mx,
 
         b, n_calls = scope_pickup(baseline[seed], members)
         a, _ = scope_pickup(log, members)
+        # 총 대기는 같은 로그를 한 번 더 훑을 뿐이라 재생 비용이 늘지 않는다.
+        bt, nb_b = scope_wait_total(baseline[seed], members)
+        at, nb_a = scope_wait_total(log, members)
         _append({
             "stage": stage, "cand_id": int(cand.cand_id),
             "cand_name": cand.cand_name, "gu": cand.gu, "dongs": cand.dongs,
@@ -247,6 +311,9 @@ def run_stage(stage: int, cands: pd.DataFrame, seeds, *, calls, depots, mx,
             "n_dong_scope": len(members), "n_calls_scope": n_calls,
             "before": b, "after": a, "delta": a - b,
             "rate_pct": (a - b) / b * 100 if b else np.nan,
+            "before_total": bt, "after_total": at, "delta_total": at - bt,
+            "rate_total_pct": (at - bt) / bt * 100 if bt else np.nan,
+            "n_boarded_before": nb_b, "n_boarded_after": nb_a,
             "elapsed_s": elapsed,
         }, path)
         if i % 10 == 0 or i == len(todo):
@@ -301,11 +368,18 @@ def seeds_missing(results: pd.DataFrame, target_ids, seeds) -> list:
 # 후보 한 곳이 읽히는 순서. **개선율 → 그 불확실성 → 규모 → 경고** 순으로 두어
 # 왼쪽부터 읽으면 "얼마나 좋은가 / 얼마나 확실한가 / 몇 명에게 닿는가"가 차례로
 # 나오게 했다. 등급 3열은 맨 끝 참고 열이다.
+#
+# **총 대기는 개선율 2열만 싣는다**(`rate_total_pct`·`rate_total_sd`). 분 단위
+# before/after 는 시드별 원값(`placement_eval.csv`)에만 두었다 — 집계표에 실으면
+# 그 값이 실측과 견줘지는데, 시뮬 총 대기는 매칭 미재현(A-19)으로 실측의
+# 0.33~0.44배라 그렇게 읽으면 안 된다. **순위 열도 만들지 않는다** — 정렬·판정
+# 기준은 픽업 그대로다.
 _GRADE_COLUMNS = [
     "cand_id", "cand_name", "gu", "dongs", "n_seed", "n_dong_scope",
     "n_calls_scope", "before", "delta", "rate_pct", "rate_sd",
     "rate_lo", "rate_hi", "interval", "sample_ok", "total_delta_min",
     "n_overlap", "rank_rate", "rank_total",
+    "rate_total_pct", "rate_total_sd",
     "grade", "gap_prev", "threshold_prev",
 ]
 
@@ -382,15 +456,26 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
     # **단계를 가리지 않고 그 후보의 모든 시드를 쓴다.** 1단계에서 이미 돈 시드는
     # 2단계에서 건너뛰므로(같은 배치·같은 시드라 결과가 같다) 단계로 거르면 그
     # 반복을 잃는다 — 시드 3회로 잡은 σ 가 2회짜리가 되어 등급이 흔들린다.
-    df = results[results["cand_id"].isin(cids)].drop_duplicates(
-        subset=["cand_id", "seed"], keep="first")
+    #
+    # **총 대기 열이 빈 옛 행은 뒤로 보낸다.** 열이 늘기 전에 돌린 결과가 같은
+    # (후보, 시드) 로 남아 있으면 dedup 이 그쪽을 집어 총 대기만 NaN 이 된다.
+    # 안정 정렬이라 둘 다 있거나 둘 다 없으면 원래 순서(1단계 우선)가 유지된다.
+    df = results[results["cand_id"].isin(cids)]
+    df = (df.assign(_legacy=df["before_total"].isna()
+                    if "before_total" in df.columns else False)
+            .sort_values("_legacy", kind="stable")
+            .drop_duplicates(subset=["cand_id", "seed"], keep="first")
+            .drop(columns="_legacy"))
 
     g = (df.groupby(["cand_id", "cand_name", "gu", "dongs"], as_index=False)
            .agg(n_seed=("seed", "nunique"),
                 n_dong_scope=("n_dong_scope", "first"),
                 n_calls_scope=("n_calls_scope", "first"),
                 before=("before", "mean"), delta=("delta", "mean"),
-                rate_pct=("rate_pct", "mean"), rate_sd=("rate_pct", "std")))
+                rate_pct=("rate_pct", "mean"), rate_sd=("rate_pct", "std"),
+                # 참고 열 — 시드 평균과 시드 간 σ. 픽업과 같은 방식으로 낸다.
+                rate_total_pct=("rate_total_pct", "mean"),
+                rate_total_sd=("rate_total_pct", "std")))
     if (g["n_seed"] < 2).any():
         raise ValueError("등급을 매기려면 후보마다 시드 2회 이상이 필요하다 "
                          "— σ 를 낼 수 없다")
@@ -589,6 +674,14 @@ def candidate_report(graded: pd.DataFrame, *, top: int = 20) -> str:
     lines.append("     쪽이고, θ 를 두지 않은 것(A-01)은 늘리는 쪽이다. "
                  "두 편의가 상쇄되는 크기를 알 수 없으므로")
     lines.append("     **절대값을 인용하지 말고 후보 간 비교로만 읽는다.**")
+    if graded["rate_total_pct"].notna().any():
+        med = (graded["rate_total_pct"] / graded["rate_pct"]).median()
+        lines.append(f"  ※ **`rate_total_pct`(총 대기 개선율)는 참고 열이다.** "
+                     f"픽업의 {med:.1f}배로 나오지만 정렬·판정 기준은 픽업")
+        lines.append("     그대로다 — 크게 나온다고 기준을 옮기면 결과를 보고 "
+                     "규칙을 바꾸는 것이 된다. 시뮬 총 대기 절대값은")
+        lines.append("     매칭 미재현(A-19)으로 실측의 0.33~0.44배라 "
+                     "**분 단위로 인용할 수 없다.**")
     return "\n".join(lines)
 
 

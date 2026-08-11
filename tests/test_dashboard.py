@@ -127,7 +127,11 @@ def test_placement_drops_grade_columns(placement):
         assert banned not in placement.columns
     # 화면이 쓰는 열은 그대로 있어야 한다
     for keep in ("rate_pct", "interval", "n_overlap", "sample_ok",
-                 "total_delta_min", "n_calls_scope", "n_dong_scope", "after"):
+                 "total_delta_min", "n_calls_scope", "n_dong_scope", "after",
+                 # 총 대기는 참고 지표지만 `ref_` 가 아니다 — 화면이 쓴다.
+                 # 등급과 성격이 다르다: 등급은 판단을 대신하는 표시라 잘라내고,
+                 # 이쪽은 「참고」 꼬리표를 달고 보여주는 값이다.
+                 "rate_total_pct", "rate_total_sd"):
         assert keep in placement.columns
 
 
@@ -435,3 +439,68 @@ def test_no_top_n_wording_on_screen():
     """
     for s in _shown_strings():
         assert "상위 " not in s, f"화면 문자열에 '상위 N' 표현이 있다: {s[:60]}"
+
+
+# ─────────────────────────────────────────────────────────────
+# 총 대기 참고 행 (08.12)
+# ─────────────────────────────────────────────────────────────
+
+def test_total_wait_row_shows_percent_only():
+    """총 대기는 **개선율(%)로만** 낸다 — 분 단위를 화면에 두지 않는다.
+
+    시뮬 총 대기 before 가 실측의 0.33~0.44배(매칭 미재현 · A-19)라, 분으로
+    보이면 실무자가 진단 화면의 실측 대기와 견주게 되는데 그 비교는 성립하지
+    않는다. 원값(분)은 `placement_eval.csv` 에만 둔다.
+    """
+    import re
+    shown = "".join(_shown_strings("sim_total_wait"))
+    assert "총 대기 개선율" in shown
+    assert not re.search(r"\d+\.\d+분|:\.\d+f\}분", shown), \
+        f"총 대기 행에 분 단위가 있다: {shown[:80]}"
+
+
+def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
+    """단서는 툴팁이 아니라 값 옆에 적는다.
+
+    **툴팁은 부연을 접는 자리이지 근거를 옮겨 놓는 자리가 아니다**(명세 3절).
+    숫자를 밖으로 인용할 때 반드시 따라가야 하는 말이라 접으면 안 된다.
+    """
+    assert "A-19" in D.TOTAL_WAIT_NOTE and "후보 간 비교" in D.TOTAL_WAIT_NOTE
+    assert D.TOTAL_WAIT_NOTE not in D.TOTAL_WAIT_HELP
+    # 물음표에는 정의와 "정렬 기준은 픽업"만 들어간다
+    assert "픽업" in D.TOTAL_WAIT_HELP
+
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
+    assert "note_html(TOTAL_WAIT_NOTE)" in body, "단서가 본문에 나가지 않는다"
+    assert 'title="{TOTAL_WAIT_HELP}"' in body or "TOTAL_WAIT_HELP" in body
+
+
+def test_total_wait_is_not_a_fifth_metric_card():
+    """카드로 만들지 않는다 — 판정 지표 넷과 같은 무게로 읽힌다.
+
+    이 값은 순위 기준이 아니다. 목록 정렬도 분포 패널도 픽업 그대로다
+    (docs/model_flow.md 「총 대기도 함께 재되 참고 열이다」).
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
+    assert ".metric(" not in body, "총 대기를 st.metric 으로 냈다"
+    assert 'class="tag"' in body, "「참고」 꼬리표가 없다"
+
+    # 정렬·분포는 픽업 열만 본다
+    for fn in ("candidate_options", "distribution_panel"):
+        fbody = src.split(f"def {fn}", 1)[1].split("\ndef ", 1)[0]
+        assert "rate_total" not in fbody, f"{fn} 이 총 대기를 기준으로 쓴다"
+
+
+def test_total_wait_row_is_silent_without_data(monkeypatch):
+    """열이 없거나 비어 있으면 아무것도 그리지 않는다.
+
+    옛 `placement_grades.csv`(총 대기 열 이전)로도 3페이지가 떠야 한다.
+    """
+    import pandas as pd
+    calls = []
+    monkeypatch.setattr(D.st, "markdown", lambda *a, **k: calls.append(a))
+    D.sim_total_wait(pd.Series({"rate_pct": -8.5}))
+    D.sim_total_wait(pd.Series({"rate_total_pct": np.nan, "rate_total_sd": np.nan}))
+    assert not calls, "데이터가 없는데 빈 행을 그렸다"

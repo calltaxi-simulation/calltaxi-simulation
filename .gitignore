@@ -27,6 +27,9 @@ outputs/*
 !outputs/placement_grades.csv
 # 민감도 결과 — model_flow.md 「민감도」 절의 근거다(9곳 × 설정 6개 = 54행, 6KB)
 !outputs/sensitivity_eval.csv
+# 보조 지표 원값 — 「대기 중 포기·60분 초과는 내지 않는다」의 근거다. 화면에서
+# 뺀 결정의 감사 자료라 결정문(model_flow.md)과 같이 있어야 한다(12KB).
+!outputs/page3_extra_raw.csv
 # patience_km.csv 는 0.5분 격자로 눌러 42KB 다. 이벤트 시점 8만 개를 그대로
 # 두면 5MB 가 넘어 저장소에 넣을 수 없다(src/patience.py 의 km_grid 참조).
 # dong_metrics.parquet 은 위 csv 와 같은 내용의 직렬화 중복이라 뺀다 —

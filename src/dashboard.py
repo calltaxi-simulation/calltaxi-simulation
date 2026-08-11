@@ -105,6 +105,19 @@ BIAS_NOTE = ("절감폭의 절대 크기는 양방향 편의를 안고 있다. �
              "쪽이다. 두 편의가 상쇄되는 크기를 알 수 없으므로 절대값을 인용하지 "
              "말고 후보 간 비교로만 읽는다.")
 
+# 총 대기(접수 → 승차) — **개선율로만 낸다.** 분 단위를 보이면 실측과 견주게
+# 되는데, 시뮬 총 대기 before 가 실측의 0.33~0.44배다(매칭 미재현 · A-19).
+# 이 문장은 툴팁이 아니라 값 옆에 그대로 적는다 — **툴팁은 부연을 접는 자리이지
+# 근거를 옮겨 놓는 자리가 아니다**(명세 3절). 숫자를 인용할 때 반드시 따라가야
+# 하는 말이므로 접으면 안 된다.
+TOTAL_WAIT_NOTE = ("시뮬은 매칭을 재현하지 못해 총 대기 절대값이 실측보다 "
+                   "짧습니다(A-19). 후보 간 비교로 읽으십시오.")
+# 물음표로 접는 쪽 — 두 지표가 무엇인지, 그리고 **순위 기준은 픽업 그대로**라는 것.
+# 총 대기 개선율이 픽업보다 크게 나오므로(1.3~2.2배) 정렬이 그쪽으로 바뀐 게
+# 아니냐는 물음이 생긴다. 기준을 옮기지 않은 이유는 model_flow 에 있다.
+TOTAL_WAIT_HELP = ("총 대기는 접수부터 승차까지, 픽업은 배차부터 승차까지입니다. "
+                   "후보 목록 정렬과 분포는 픽업 개선율 기준 그대로입니다.")
+
 # ─────────────────────────────────────────────────────────────
 # 색칠 지표 — 사이드바에서 고른다.
 #
@@ -249,9 +262,14 @@ def load_placement() -> pd.DataFrame:
     화면에서 안 쓰는 것으로 충분하지 않다 — 열이 남아 있으면 다음 사람이
     집어 쓴다. 여기서 자르면 3페이지 코드가 등급에 손댈 방법이 없다.
 
+    **총 대기 2열(`rate_total_pct`·`rate_total_sd`)은 자르지 않는다.** 참고
+    지표지만 화면이 쓴다 — 등급과 성격이 다르다. 등급은 판단을 대신하는 표시라
+    잘라냈고, 이쪽은 「참고」 꼬리표를 달고 보여주는 값이다(`sim_total_wait`).
+
     반환: cand_id, cand_name, gu, dongs, n_dong_scope, n_calls_scope,
           before, delta, rate_pct, rate_sd, rate_lo, rate_hi, interval,
-          sample_ok, total_delta_min, n_overlap (+ after 파생)
+          sample_ok, total_delta_min, n_overlap, rate_total_pct,
+          rate_total_sd (+ after 파생)
     """
     path = OUTPUTS / "placement_grades.csv"
     if not path.exists():
@@ -1030,6 +1048,20 @@ CSS = f"""
               margin: .1rem 0 .8rem; }}
   .premise b {{ color: {INK}; font-weight: 620; }}
 
+  /* 참고 지표 — 결과 카드와 전제 사이 한 줄. 카드로 만들지 않는다: st.metric
+     다섯 번째가 되면 판정 지표와 같은 무게로 읽히는데, 이 값은 순위 기준이
+     아니다(순위는 픽업 그대로). 카드보다 낮고 `.note` 보다는 높은 층에 둔다. */
+  .aux {{ font-size: .78rem; line-height: 1.55; color: #55524C;
+          margin: .35rem 0 .1rem; }}
+  .aux b {{ color: {INK}; font-weight: 620;
+            font-variant-numeric: tabular-nums; }}
+  .aux .dim {{ color: #949087; font-variant-numeric: tabular-nums; }}
+  /* 「참고」 — 값 앞에 붙어 성격을 먼저 말한다. 값을 읽고 나서 만나면 늦다. */
+  .tag {{ display: inline-block; font-size: .64rem; font-weight: 600;
+          color: #7A766E; background: #EDEBE6; border: 1px solid #E0DCD5;
+          border-radius: 3px; padding: .04rem .28rem; margin-right: .35rem;
+          vertical-align: .06em; letter-spacing: .02em; }}
+
   /* 물음표 — st.metric 의 `help` 아이콘과 같은 성격이다. 별도 요소를 만들지
      않으려고 `title` 툴팁을 쓴다(전제 블록을 한 번의 markdown 으로 내야 한다). */
   .qmark {{ display: inline-flex; align-items: center; justify-content: center;
@@ -1067,6 +1099,8 @@ CSS = f"""
   table.grid tbody th {{ text-align: left; color: #6E6A62; }}
   table.grid td {{ font-size: .92rem; font-weight: 600; text-align: right;
                    padding: .18rem .3rem; color: {INK}; }}
+  /* 참고 열 — 같은 표 안에서 판정 지표와 무게를 가른다(색만 낮춘다) */
+  table.grid th.aux-td, table.grid td.aux-td {{ color: #948F86; }}
 
   /* 사이드바 지표별 기준선 표 */
   table.legend-tbl {{ margin-top: .55rem; }}
@@ -1598,6 +1632,40 @@ def sim_scenario(row) -> None:
         '</div>', unsafe_allow_html=True)
 
 
+def sim_total_wait(row) -> None:
+    """총 대기 개선율 — **참고.** 픽업 개선율 카드 바로 아래 한 줄.
+
+    **왜 카드가 아닌가.** `st.metric` 다섯 번째로 두면 판정 지표 넷과 같은 무게로
+    읽히는데, 이 값은 순위 기준이 아니다 — 목록 정렬도 분포도 픽업 그대로다.
+    성격이 다른 것을 같은 모양으로 두면 화면이 "이것도 기준"이라고 말하게 된다.
+
+    **개선율(%)만 낸다.** before/after 를 분으로 적으면 실무자가 진단 화면의 실측
+    대기와 견주는데, 시뮬 총 대기 before 는 실측의 0.33~0.44배다(매칭 미재현 ·
+    A-19). 그 비교는 성립하지 않는다. 원값(분)은 `placement_eval.csv` 에만 둔다.
+
+    **그런데도 왜 보이는가.** 픽업만 보이면 "그래서 이용자 체감은 얼마나
+    줄어드나"에 답이 없다. 총 대기가 이용자가 실제로 겪는 시간이고, 후보 간
+    비교라면 이 값도 읽을 수 있다.
+
+    σ 는 시드 3회의 표준편차다. **대비 구간(±1.41σ)을 쓰지 않는다** — 그 폭은
+    등급 규칙에서 유도한 것이라 겹침 판정과 짝인데, 총 대기로는 겹침을 계산하지
+    않는다. 여기서 말할 수 있는 것은 "시드에 따라 이만큼 흔들린다"뿐이다.
+    """
+    rate = row.get("rate_total_pct")
+    if rate is None or pd.isna(rate):
+        return
+    sd = row.get("rate_total_sd")
+    spread = ("" if sd is None or pd.isna(sd)
+              else f'<span class="dim"> · 시드 간 σ {sd:.2f}%p</span>')
+    st.markdown(
+        '<div class="aux">'
+        '<span class="tag">참고</span>'
+        f'총 대기 개선율 <b>{rate:+.2f}%</b>{spread}'
+        f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span>'
+        + note_html(TOTAL_WAIT_NOTE)
+        + '</div>', unsafe_allow_html=True)
+
+
 def sim_dong_panel(cand_id: int, row) -> None:
     """담당 동 목록 + 영향권 규모.
 
@@ -1680,7 +1748,12 @@ def render_sim_page() -> None:
     m4.metric("픽업 before → after",
               f"{row['before']:.2f} → {row['after']:.2f}분")
 
+    # 참고 지표는 판정 지표 **아래** 한 줄이다. 카드로 만들지 않는 이유는
+    # `sim_total_wait` 주석 참조 — 순위 기준은 픽업 그대로다.
+    sim_total_wait(row)
+
     # **전제는 결과 바로 뒤, 지도보다 앞이다.** 아래 경고들과 같은 층에 두면 늦다.
+    # 참고 행보다도 뒤인 것은, 전제("10대 증차")가 그 행에도 걸리기 때문이다.
     sim_scenario(row)
 
     left, right = st.columns([4, 1], gap="medium")
@@ -1716,16 +1789,27 @@ def render_sim_page() -> None:
             ev = load_placement_seeds()
             sub = ev[ev["cand_id"] == row["cand_id"]].sort_values("seed")
             if len(sub):
+                # 총 대기는 **개선율 한 칸만** 붙인다. before/after 를 분으로
+                # 실으면 실측과 견주게 되는데 그 비교는 성립하지 않는다(A-19).
+                # 위 참고 행이 적은 σ 를 여기서 눈으로 확인할 수 있어야 하므로
+                # 시드별 값 자체는 낸다.
+                has_tw = "rate_total_pct" in sub.columns
                 cells = "".join(
                     f'<tr><th>{int(s.seed)}</th><td>{s.before:.2f}</td>'
-                    f'<td>{s.after:.2f}</td><td>{s.rate_pct:+.2f}%</td></tr>'
+                    f'<td>{s.after:.2f}</td><td>{s.rate_pct:+.2f}%</td>'
+                    + (f'<td class="aux-td">{s.rate_total_pct:+.2f}%</td>'
+                       if has_tw and pd.notna(s.rate_total_pct) else
+                       ('<td class="aux-td">—</td>' if has_tw else ''))
+                    + '</tr>'
                     for s in sub.itertuples())
+                head_tw = '<th class="aux-td">총 대기</th>' if has_tw else ''
                 st.markdown(
                     '<table class="grid"><thead><tr><th>시드</th><th>before</th>'
-                    f'<th>after</th><th>개선율</th></tr></thead><tbody>{cells}'
-                    '</tbody></table>'
+                    f'<th>after</th><th>픽업</th>{head_tw}</tr></thead>'
+                    f'<tbody>{cells}</tbody></table>'
                     # 흔들림이 무엇인지는 「대비 구간」 물음표가 이미 말한다.
-                    + note_html(f"시드 간 σ {row['rate_sd']:.3f}%p"),
+                    + note_html(f"before·after 는 픽업(분), 오른쪽 두 열은 "
+                                f"개선율(%). 시드 간 σ {row['rate_sd']:.3f}%p"),
                     unsafe_allow_html=True)
             else:
                 st.markdown(note_html("원값 파일이 없습니다."),

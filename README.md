@@ -148,6 +148,9 @@ simulation/
 │  ├ model_flow.md       # 시뮬 설계 — 흐름도·조 편성·엔진·난수
 │  ├ dashboard_spec.md   # 대시보드 화면 결정과 근거
 │  └ external_sources.md # 코드 밖 근거 — 문헌·구술·소급 기록·저장소 밖 자료
+├ analysis/         # 일회성 확인 스크립트(파이프라인 아님)
+│  ├ page3_extra.py  # 대표 3곳 보조 지표 — 총 대기·대기 중 포기·60분 초과
+│  └ page3_actual.py # 같은 기간·같은 범위의 실측과 시뮬 before 대조
 ├ tests/            # pytest
 ├ cache/            # 콜 원본 parquet 캐시(자동 생성, git 제외)
 └ outputs/          # 결과
@@ -159,7 +162,8 @@ simulation/
    ├ patience_summary.csv        # 인내심 추정 요약 1행
    ├ dong_candidates.csv         # 동 426개 × 배정된 후보(383동 · 244곳) — src/candidates.py 산출
    ├ placement_eval.csv          # 후보 평가 원값(244곳 × 시드 3회 = 732행) — src/evaluate.py 산출
-   ├ placement_grades.csv        # 후보별 개선율·대비 구간·총절감·겹침 수
+   ├ placement_grades.csv        # 후보별 개선율·대비 구간·총절감·겹침 수 + 총 대기 개선율(참고)
+   ├ page3_extra_raw.csv         # 대표 3곳 × 시드 3회 보조 지표(총 대기·포기·60분 초과) — analysis/page3_extra.py 산출
    └ sensitivity_eval.csv        # 가정 민감도 원값(9곳 × 설정 6개 = 54행) — src/sensitivity.py 산출
 ```
 
@@ -221,4 +225,7 @@ simulation/
 배치안이 바뀌어도 같은 콜은 같은 값을 받는다.
 라이브러리 버전은 requirements.txt 관리. 시드·설정을 바꾸면 기록한다.
 결과는 outputs/ 에 저장하며, `placement_eval.csv`와 `sensitivity_eval.csv` 는 (후보, 시드) 단위로
-append 되어 중단·재개가 가능하다.
+append 되어 중단·재개가 가능하다. **열이 늘면 그 행은 다시 돌린다** — 옛 행을
+건너뛰면 새 열만 빈 결과가 조용히 집계로 들어간다(`evaluate._ensure_columns` ·
+`run_stage`). 총 대기 6열을 추가한 08.12 에 244곳 × 3시드를 전부 다시 돌렸고,
+**픽업 값은 732행 전부 소수점까지 그대로 재현됐다.**

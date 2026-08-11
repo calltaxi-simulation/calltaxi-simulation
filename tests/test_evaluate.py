@@ -21,15 +21,26 @@ import evaluate as E   # noqa: E402
 
 
 def _rows(spec, stage=2, calls=4000):
-    """(cand_id, [시드별 개선율]) → 결과 CSV 형식 행들."""
+    """(cand_id, [시드별 개선율]) → 결과 CSV 형식 행들.
+
+    총 대기 열도 채운다 — 비워 두면 `run_stage` 가 「열이 늘기 전 행」으로 보고
+    다시 돌린다(그 규칙은 아래 `test_rows_without_total_wait_are_rerun`).
+    """
     out = []
     for cid, rates in spec:
         for seed, r in enumerate(rates, start=42):
+            # 총 대기는 픽업의 2배 수준에 개선율은 1.5배 — 실제 관계(1.3~2.2배)를
+            # 흉내 낸 값이다. 판정에 쓰이지 않으므로 크기 자체는 중요하지 않다.
+            rt = r * 1.5
             out.append({"stage": stage, "cand_id": cid, "cand_name": f"c{cid}",
                         "gu": "종로구", "dongs": "종로구 사직동", "capacity": 10,
                         "seed": seed, "n_dong_scope": 20, "n_calls_scope": calls,
                         "before": 14.0, "after": 14.0 * (1 + r / 100),
-                        "delta": 14.0 * r / 100, "rate_pct": r, "elapsed_s": 50.0})
+                        "delta": 14.0 * r / 100, "rate_pct": r,
+                        "before_total": 30.0, "after_total": 30.0 * (1 + rt / 100),
+                        "delta_total": 30.0 * rt / 100, "rate_total_pct": rt,
+                        "n_boarded_before": 3800, "n_boarded_after": 3820,
+                        "elapsed_s": 50.0})
     return pd.DataFrame(out, columns=E._COLUMNS)
 
 
@@ -66,12 +77,66 @@ def test_resume_skips_done_pairs(tmp_path, monkeypatch):
                         lambda pl, *a, **k: ran.append(pl) or pd.DataFrame())
     monkeypatch.setattr(E, "scope_members", lambda *a, **k: {("종로구", "사직동")})
     monkeypatch.setattr(E, "scope_pickup", lambda log, m: (14.0, 4000))
+    monkeypatch.setattr(E, "scope_wait_total", lambda log, m: (30.0, 3800))
 
     E.run_stage(1, cands, (42,), calls=None, depots=None, mx=None,
                 reservation=None, dong_xy=None, path=p)
     # 후보 3만 남았어야 한다 — before(None) 1회 + 후보 1회
     assert ran == [None, 3], f"이미 끝난 후보를 다시 돌렸다: {ran}"
     assert len(E.load_results(p)) == 3
+
+
+def test_rows_without_total_wait_are_rerun(tmp_path, monkeypatch):
+    """**총 대기 열이 없던 시절의 행은 안 끝난 것으로 본다.**
+
+    건너뛰면 그 (후보, 시드) 만 총 대기가 NaN 인 채 집계로 들어간다 — 화면에는
+    「참고」 행이 후보에 따라 비거나 시드 2개짜리 σ 가 나온다. 조용히 틀리는
+    쪽이라 규칙으로 막는다.
+    """
+    p = tmp_path / "eval.csv"
+    old = _rows([(1, [-3.0]), (2, [-1.0])], stage=1)
+    old = old.drop(columns=["before_total", "after_total", "delta_total",
+                            "rate_total_pct", "n_boarded_before",
+                            "n_boarded_after"])
+    old.to_csv(p, index=False, encoding="utf-8-sig")
+
+    cands = pd.DataFrame({"cand_id": [1, 2], "cand_name": ["a", "b"],
+                          "lat": [37.5] * 2, "lon": [127.0] * 2,
+                          "capacity": [10] * 2, "gu": ["종로구"] * 2,
+                          "dongs": ["x"] * 2, "n_dong_assigned": [1] * 2})
+    ran = []
+    monkeypatch.setattr(E.S, "run_placement",
+                        lambda pl, *a, **k: ran.append(pl) or pd.DataFrame())
+    monkeypatch.setattr(E, "scope_members", lambda *a, **k: {("종로구", "사직동")})
+    monkeypatch.setattr(E, "scope_pickup", lambda log, m: (14.0, 4000))
+    monkeypatch.setattr(E, "scope_wait_total", lambda log, m: (30.0, 3800))
+
+    E.run_stage(1, cands, (42,), calls=None, depots=None, mx=None,
+                reservation=None, dong_xy=None, path=p)
+    assert ran == [None, 1, 2], f"옛 행을 끝난 것으로 봤다: {ran}"
+
+    # 같은 (후보, 시드) 가 옛 행·새 행으로 둘씩 남는다.
+    got = E.load_results(p)
+    assert len(got) == 4
+    assert list(got.columns) == E._COLUMNS, "옛 파일에 열을 맞춰 놓지 않았다"
+
+
+def test_grades_prefer_rows_that_have_total_wait():
+    """옛 행과 새 행이 같은 (후보, 시드) 로 남으면 **새 행**을 집는다.
+
+    옛 행이 dedup 에서 이기면 총 대기가 통째로 NaN 이 되어 화면의 「참고」 행이
+    말없이 사라진다.
+    """
+    new = _rows([(1, [-5.0, -5.1]), (2, [-1.0, -1.1])])
+    old = new.copy()
+    old[["before_total", "after_total", "delta_total", "rate_total_pct"]] = np.nan
+    mixed = pd.concat([old, new], ignore_index=True)   # 옛 행이 앞에 온다
+
+    g = E.assign_grades(mixed)
+    assert g["rate_total_pct"].notna().all(), "옛 행이 dedup 에서 이겼다"
+    # 값도 새 행 그대로여야 한다 — 픽업의 1.5배로 만들어 둔 값이다(_rows)
+    assert g["rate_total_pct"].round(3).tolist() == \
+        (g["rate_pct"] * 1.5).round(3).tolist()
 
 
 def test_parse_seeds():
@@ -95,6 +160,7 @@ def test_seed_is_the_outer_loop(tmp_path, monkeypatch):
     monkeypatch.setattr(E.S, "run_placement", lambda pl, *a, **k: pd.DataFrame())
     monkeypatch.setattr(E, "scope_members", lambda *a, **k: {("종로구", "사직동")})
     monkeypatch.setattr(E, "scope_pickup", lambda log, m: (14.0, 4000))
+    monkeypatch.setattr(E, "scope_wait_total", lambda log, m: (30.0, 3800))
 
     E.run_stage(2, cands, (42, 43), calls=None, depots=None, mx=None,
                 reservation=None, dong_xy=None, path=p)
