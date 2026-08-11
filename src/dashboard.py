@@ -18,6 +18,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -91,8 +92,18 @@ SIM_DAYS = S.REPRESENTATIVE_DAYS
 SIM_END = SIM_START + pd.Timedelta(SIM_DAYS - 1, unit="D")
 SIM_BASIS = f"대표 기간 {SIM_START:%Y-%m-%d}~{SIM_END:%Y-%m-%d}"
 
-# 픽업 재현 수준(A-19·A-20). 절감폭의 절대 크기가 이만큼 축소돼 있다.
+# 픽업 재현 수준(A-19·A-20) — 시뮬 픽업이 실측의 이만큼이다.
+#
+# **이 값을 "절감이 그만큼 축소됐다"로 읽으면 안 된다.** 편의는 양방향이다 —
+# 매칭·배차 미재현(A-19·A-20)은 절감을 줄이는 쪽이고, θ 를 두지 않은 것(A-01)은
+# 늘리는 쪽이다(θ=60 이면 대표 9곳 평균 개선율이 −18%, 최상위는 −28% 준다 —
+# docs/model_flow.md 「민감도」). 두 편의가 상쇄되는 크기를 알 수 없으므로
+# **절대값을 인용하지 말고 후보 간 비교로만 읽는다.** 화면 문구는 그 문장이다.
 PICKUP_FIDELITY_PCT = 53
+BIAS_NOTE = ("절감폭의 절대 크기는 양방향 편의를 안고 있다. 매칭·배차 미재현"
+             "(A-19·A-20)은 절감을 줄이는 쪽이고, θ 를 두지 않은 것(A-01)은 늘리는 "
+             "쪽이다. 두 편의가 상쇄되는 크기를 알 수 없으므로 절대값을 인용하지 "
+             "말고 후보 간 비교로만 읽는다.")
 
 # ─────────────────────────────────────────────────────────────
 # 색칠 지표 — 사이드바에서 고른다.
@@ -790,6 +801,11 @@ def note_html(text: str) -> str:
     return f'<div class="note">{text}</div>' if text else ""
 
 
+def role_html(text: str) -> str:
+    """지표 역할 표기 — **본문 색.** 회색 주석과 성격이 다르다(CSS `.role` 참조)."""
+    return f'<div class="role">{text}</div>' if text else ""
+
+
 def cand_spec_rows(cand_id: int) -> None:
     """후보 제원 — 면수·소스·자치구. 3페이지 「후보 제원」에 접어 둔다.
 
@@ -1005,6 +1021,24 @@ CSS = f"""
            background: #FBF2E6; border-left: 2px solid #C9975B;
            padding: .45rem .6rem; border-radius: 3px; margin-bottom: .5rem; }}
 
+  /* 전제 — 경고가 아니다. `.warn` 은 "이 후보를 조심하라"인데 이건 어느 후보에나
+     같은 조건이라 색을 가른다. 중성 잉크 톤으로 두어 결과 카드와 지도 사이에
+     조용히 끼어들되, 왼쪽 굵은 선으로 "읽고 넘어가라"는 무게는 준다. */
+  .premise {{ font-size: .78rem; line-height: 1.6; color: #55524C;
+              background: #F4F2ED; border-left: 3px solid #8A867D;
+              padding: .55rem .75rem; border-radius: 3px;
+              margin: .1rem 0 .8rem; }}
+  .premise b {{ color: {INK}; font-weight: 620; }}
+
+  /* 물음표 — st.metric 의 `help` 아이콘과 같은 성격이다. 별도 요소를 만들지
+     않으려고 `title` 툴팁을 쓴다(전제 블록을 한 번의 markdown 으로 내야 한다). */
+  .qmark {{ display: inline-flex; align-items: center; justify-content: center;
+            width: 13px; height: 13px; margin-left: .3rem;
+            border: 1px solid #B4AFA6; border-radius: 50%;
+            font-size: .58rem; color: #8A867D; cursor: help;
+            vertical-align: text-top; }}
+  .qmark:hover {{ border-color: {INK}; color: {INK}; }}
+
   /* 핵심 지표 카드 — 숫자가 주인공 */
   .cards {{ display: grid; grid-template-columns: 1fr 1fr; gap: .45rem;
             margin-bottom: .7rem; }}
@@ -1044,6 +1078,14 @@ CSS = f"""
   table.legend-tbl tr.cur {{ background: #F0EEE9; }}
 
   .note {{ font-size: .69rem; color: #949087; line-height: 1.45; margin-top: .4rem; }}
+
+  /* 지표 역할 — **본문 색이다.** 「개선율은 이것, 총절감은 저것」을 `.note` 회색으로
+     두면 보조 주석처럼 읽혀 눈이 지나친다. 그런데 **두 지표를 함께 봐야 한다**는 것이
+     이 패널의 요점이라, 역할 표기가 먼저 눈에 들어와야 그 요점이 성립한다.
+     뒤따르는 백분위·부연은 `.note` 회색 그대로 둔다 — 전부 짙게 하면 아무것도
+     도드라지지 않는다. */
+  .role {{ font-size: .76rem; color: {INK}; line-height: 1.55; margin-top: .55rem; }}
+  .role b {{ font-weight: 620; }}
 
   .legend {{ font-size: .72rem; color: #7A766E; line-height: 1.9;
              font-variant-numeric: tabular-nums; }}
@@ -1123,14 +1165,166 @@ def candidate_picker(sb) -> None:
         st.rerun()
 
     # 라벨에 두 숫자가 붙어 있으니 각각이 무엇인지 여기서 한 번 말한다.
-    # 세 번째 줄이 표본 부족으로 이어진다 — 같은 이야기의 앞뒤다.
+    # **역할 두 줄은 본문 색이다** — 회색으로 두면 보조 주석처럼 읽혀 눈이 지나치는데,
+    # 두 지표를 함께 봐야 한다는 것이 이 목록의 요점이다. 뒤 두 줄(주의·표본 부족)은
+    # 회색 그대로 둔다 — 전부 짙게 하면 아무것도 도드라지지 않는다.
     n_weak = int((~g["sample_ok"]).sum())
+    sb.markdown(
+        role_html("<b>개선율</b> — 3km 안 대기가 몇 % 줄어드는지<br>"
+                  "<b>총절감</b> — 줄어든 시간의 합 (한 달 기준)")
+        + note_html(
+            "좁은 지역일수록 개선율이 커 보입니다. 둘을 함께 보십시오.<br>"
+            f"※표본부족 <b>{n_weak}곳</b> — 3km 콜 {E.MIN_CALLS_SCOPE:,}건 미만이라 "
+            f"개선율이 커 보여도 닿는 사람이 적습니다."), unsafe_allow_html=True)
+
+
+# 사이드바 히스토그램 — 폭이 좁아 **분포 모양과 표식 위치만** 읽히면 된다.
+# 축 눈금을 최소로 두고 y축은 통째로 지운다(도수는 세는 값이 아니라 모양이다).
+DIST_H = 104
+DIST_BINS = 34
+
+
+def _label_pct(v: float) -> str:
+    return f"{v:+.1f}%"
+
+
+def _label_min(v: float, scale: bool) -> str:
+    """총절감(분) 축 라벨. 사이드바 폭이 좁아 네 자리를 그대로 못 쓴다.
+
+    `-2,954` 는 6글자라 축 양 끝에서 잘린다. 천 단위로 줄이면 `-3.0천분` 4~5글자다.
+    **양 끝의 단위를 섞지 않는다** — 한쪽만 천 단위면 폭을 눈으로 견줄 수 없다.
+    """
+    return f"{v / 1000:+.1f}천분" if scale else f"{v:+,.0f}분"
+
+
+def _dist_fig(values: np.ndarray, cur: float, label) -> go.Figure:
+    """분포 하나 + 현재 후보 표식. **순위 번호를 붙이지 않는다.**
+
+    대비 구간이 겹치는 후보끼리는 우열을 가릴 수 없다는 원칙이 여기서도 유지돼야
+    한다 — 이 그림이 답하는 것은 "몇 등인가"가 아니라 "분포 어디쯤인가"다.
+
+    **두 지표 모두 음수이고 작을수록 좋다**(개선율 −8.57% · 총절감 −2,954분).
+    그래서 축 방향을 따로 뒤집을 일이 없다 — 오름차순이 곧 좋은 쪽 → 나쁜 쪽이고,
+    두 그림의 방향이 저절로 맞는다.
+
+    **양 끝 값은 눈금이 아니라 주석으로 찍는다.** 눈금은 값에 **가운데 정렬**돼
+    라벨의 절반이 그림 밖으로 나가는데, 좌우 여백이 2px 이라 거기서 잘린다.
+    폭이 좁은 라벨(`-8.6`)은 살아남고 넓은 라벨(`-2,954`)은 통째로 사라져 **총절감
+    차트만 축이 없었다.** 주석을 안쪽으로 정렬하면(왼쪽 끝은 `left`, 오른쪽 끝은
+    `right`) 폭과 무관하게 그림 안에 들어온다.
+
+    **축이 없으면 분포의 폭을 알 수 없다** — 표식이 "어디쯤"만 말하고 "얼마나
+    차이 나는지"는 못 말한다. 두 지표를 함께 보는 화면이라 폭이 보여야 한다.
+    """
+    fig = go.Figure(go.Histogram(
+        x=values, nbinsx=DIST_BINS, marker_color="#D8D4CC",
+        marker_line_width=0, hoverinfo="skip"))
+    fig.add_vline(x=cur, line_color=IMPROVE_DARK, line_width=2)
+    fig.add_annotation(x=cur, y=1, yref="paper", text="이 후보", showarrow=False,
+                       yanchor="bottom", font=dict(size=9, color=IMPROVE_DARK))
+
+    lo, hi = float(np.min(values)), float(np.max(values))
+    for x, anchor in ((lo, "left"), (hi, "right")):
+        fig.add_annotation(x=x, y=0, yref="paper", text=label(x), showarrow=False,
+                           xanchor=anchor, yanchor="top", yshift=-3,
+                           font=dict(size=9, color="#9A968D"))
+
+    fig.update_xaxes(showticklabels=False, ticks="", showgrid=False, zeroline=False)
+    fig.update_yaxes(visible=False)
+    # 아래 여백은 양 끝 라벨이 앉을 자리다 — 2px 이면 라벨이 잘린다.
+    fig.update_layout(height=DIST_H, margin=dict(l=2, r=2, t=14, b=18),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      bargap=0.06, showlegend=False)
+    return fig
+
+
+def _subject(noun: str) -> str:
+    """주격 조사를 붙인다 — 받침이 있으면 '이', 없으면 '가'.
+
+    「수혜이」처럼 틀린 조사가 화면에 나가는 것을 막는다. 한글 음절은
+    `(코드 − 0xAC00) % 28` 이 0 이 아니면 받침이 있다. 한글이 아니면 '이'로 둔다
+    (숫자·영문 지표명이 들어올 일은 없지만 조용히 깨지지는 않게).
+    """
+    ch = ord(noun[-1]) - 0xAC00
+    return noun + ("이" if not 0 <= ch < 11172 or ch % 28 else "가")
+
+
+def _position_text(values: np.ndarray, cur: float, noun: str) -> str:
+    """분포에서 '좋은 쪽으로부터' 어디쯤인가. **등수가 아니다.**
+
+    **양 끝에서는 백분율이 거짓말을 한다.** 개선이 가장 큰 후보는 0% 가 되어
+    "아무것도 아닌 건가"로 읽히고, 개선이 가장 작은 후보는 100% 가 되어 **최대치로
+    읽힌다 — 뜻이 정반대로 전달된다.** 축이 '좋은 쪽에서부터'라는 것을 모르면
+    큰 숫자가 좋아 보이기 때문이다.
+
+    **규칙은 "반올림한 숫자가 거짓말을 하면 말로 바꾼다"** 하나다. 0 이나 100 으로
+    떨어지는 구간에서만 「가장 ~ 쪽 끝」으로 적고, 그 사이는 백분율 그대로 낸다.
+    문턱을 따로 정하지 않아 표기 정밀도와 어긋날 일이 없다.
+
+    **등수를 말하는 것이 아니다.** 244곳에서 0 으로 떨어지는 것은 한두 곳이라
+    그 후보들이 「가장 큰 쪽 끝」을 함께 쓴다 — 끝에 있다는 사실만 말하고 그들
+    사이의 순서는 말하지 않는다. 대비 구간이 겹치는 후보끼리 우열을 가릴 수 없다는
+    원칙과 같은 방향이다. 히스토그램의 표식이 이미 같은 것을 보여 준다.
+    """
+    v = np.asarray(values, dtype=float)
+    pct = round(float((v < cur).mean()) * 100)
+    subj = _subject(noun)
+    if pct <= 0:
+        return f"{subj} 가장 큰 쪽 끝입니다"
+    if pct >= 100:
+        return f"{subj} 가장 작은 쪽 끝입니다"
+    return f"{subj} 큰 쪽에서 약 <b>{pct}%</b> 지점"
+
+
+def distribution_panel(sb, row) -> None:
+    """개선율·총절감 분포 안에서 이 후보가 어디 있는지 — **후보 목록 아래.**
+
+    **후보 하나만 보이면 "10대 넣었으니 좋아졌겠지"로 읽힌다.** 같은 10대를 넣어도
+    위치에 따라 개선율이 몇 배로 갈린다는 사실이 화면에 있어야 이 도구가 재는 것이
+    증차 효과가 아니라 **위치 효과**라는 것이 성립한다.
+
+    **두 지표를 나란히 두는 이유** — 총절감만 보면 "콜 많은 지역에 두면 된다"로
+    읽힌다. 순위 상관이 +0.32 뿐이라 두 순위는 거의 겹치지 않는다. 어느 하나로
+    정렬해도 그 방향으로 오독되므로 역할을 각각 적는다.
+
+    **순위 번호는 붙이지 않는다.** 백분위는 "대략 어디쯤"이지 등수가 아니다.
+    """
+    g = load_placement()
+    if g.empty or len(g) < 2:
+        return
+    rate = g["rate_pct"].to_numpy(float)
+    total = g["total_delta_min"].to_numpy(float)
+    cur_r, cur_t = float(row["rate_pct"]), float(row["total_delta_min"])
+    rho = float(pd.Series(rate).corr(pd.Series(total), method="spearman"))
+
+    sb.markdown(f'<div class="map-title">{len(g)}곳 분포에서 이 후보</div>',
+                unsafe_allow_html=True)
+
+    # 역할 표기는 본문 색, 뒤따르는 백분위는 회색 — 색으로 위계를 가른다.
+    sb.markdown(role_html("<b>개선율</b> — 이 지역이 얼마나 좋아지나")
+                + note_html(_position_text(rate, cur_r, "개선")),
+                unsafe_allow_html=True)
+    sb.plotly_chart(_dist_fig(rate, cur_r, _label_pct),
+                    width="stretch", config={"displayModeBar": False},
+                    key=f"dist-rate-{int(row['cand_id'])}")
     sb.markdown(note_html(
-        "개선율 — 3km 안 대기가 몇 % 줄어드는지<br>"
-        "총절감 — 줄어든 시간의 합 (한 달 기준)<br>"
-        "좁은 지역일수록 개선율이 커 보입니다. 둘을 함께 보십시오.<br>"
-        f"※표본부족 <b>{n_weak}곳</b> — 3km 콜 {E.MIN_CALLS_SCOPE:,}건 미만이라 "
-        f"개선율이 커 보여도 닿는 사람이 적습니다."), unsafe_allow_html=True)
+        f"같은 {S.NEW_DEPOT_VEHICLES}대를 넣어도 위치에 따라 "
+        f"<b>{rate.min():+.2f}% ~ {rate.max():+.2f}%</b> 로 갈립니다."),
+        unsafe_allow_html=True)
+
+    sb.markdown(role_html("<b>총절감</b> — 몇 사람에게 닿나")
+                + note_html(_position_text(total, cur_t, "수혜")),
+                unsafe_allow_html=True)
+    # 천 단위 축약은 값이 네 자리를 넘을 때만 — 세 자리면 그대로가 더 읽기 쉽다
+    scale = float(np.abs(total).max()) >= 1000
+    sb.plotly_chart(_dist_fig(total, cur_t, lambda v: _label_min(v, scale)),
+                    width="stretch", config={"displayModeBar": False},
+                    key=f"dist-total-{int(row['cand_id'])}")
+
+    sb.markdown(note_html(
+        f"두 순위는 상관 <b>{rho:+.2f}</b> 로 거의 겹치지 않습니다 — 다른 것을 "
+        "잽니다. 어느 하나만 보면 그 방향으로 읽히므로 둘을 함께 보십시오."),
+        unsafe_allow_html=True)
 
 
 def sidebar(poly: pd.DataFrame) -> None:
@@ -1329,12 +1523,79 @@ def sim_warnings(row) -> None:
         st.markdown(
             f'<div class="warn">3km 콜 {int(row["n_calls_scope"]):,}건으로 '
             f'수혜 범위가 좁습니다.</div>', unsafe_allow_html=True)
+    # **방향을 단정하지 않는다**(08.10 정정). 원래 "절감폭은 실제보다 작게
+    # 나옵니다"였는데 한쪽 편의만 센 문장이라 틀렸다 — 근거는 BIAS_NOTE 주석.
     st.markdown(note_html(
-        "절감폭은 실제보다 작게 나옵니다. 후보 간 비교로 읽으십시오."),
-        unsafe_allow_html=True)
+        "절감폭의 절대 크기는 양방향 편의를 안고 있습니다. "
+        "후보 간 비교로 읽으십시오."), unsafe_allow_html=True)
     st.markdown(note_html(
         f"대표 기간({SIM_START:%Y-%m-%d}~{SIM_END:%m-%d}) 기준입니다. "
         f"진단 화면의 연간 값과 다릅니다."), unsafe_allow_html=True)
+
+
+@st.cache_data(show_spinner=False)
+def fleet_effect() -> dict:
+    """증차가 실제로 몇 대인지 — **코드에서 계산한다.**
+
+    화면에 574/582/8 을 적어 두면 `NEW_DEPOT_VEHICLES`·`FLEET_WEEKDAY` 나 차고지
+    정원이 바뀔 때 조용히 어긋난다. `run_placement` 이 하는 계산을 그대로 돌린다.
+
+    **후보와 무관하다** — 배속은 어느 후보든 10대로 고정이고(A-10),
+    `allocate_fleet` 은 정원 벡터만 본다. 그래서 한 번 계산해 캐시한다.
+    """
+    dep = load.load_depots()
+    res = S.resolve_placement({"name": "_", "lat": 37.5, "lon": 127.0}, dep)
+    scale = float(res["capacity"].sum()) / float(dep["capacity"].sum())
+    out = {"cap_base": int(dep["capacity"].sum()),
+           "cap_new": int(res["capacity"].sum()), "scale": scale}
+    for tag, base in (("weekday", S.FLEET_WEEKDAY), ("weekend", S.FLEET_WEEKEND)):
+        n = int(round(base * scale))
+        per, old = S.allocate_fleet(res, n), S.allocate_fleet(dep, base)
+        out[tag] = {"base": int(base), "after": n, "new_depot": int(per[-1]),
+                    "changed": int((per[:-1] != old).sum())}
+    return out
+
+
+# 물음표 도움말 — 본문에 두면 길어지는 부연을 `title` 로 접는다. 별도 요소를
+# 만들지 않아 전제 블록이 한 번의 markdown 으로 나간다(패널 조각내지 말 것).
+#
+# **주말 단서만 남긴다**(08.10). 「기존 차고지에서 차감하지 않는 이유」 문단을
+# 걷어냈다 — 그건 설계 근거라 문서에 있으면 되고(A-10), 화면에서 실무자가 할 일이
+# 없다. 남은 문단은 성격이 다르다: 전제 블록이 평일 값을 **그 값인 것처럼** 적으므로
+# 이 단서가 없으면 화면이 주말에 대해 틀린 말을 한다.
+SCENARIO_HELP = (
+    "주말은 {wke_base} → {wke_after}대이고 이 거점이 {wke_new}대입니다. "
+    "대표 기간이 평일 중심이라 평일 값을 기본으로 보입니다."
+)
+
+
+def sim_scenario(row) -> None:
+    """**이 숫자가 어떤 조건에서 나왔는지.** 후보 카드 바로 아래에 둔다.
+
+    아래쪽 경고들과 같은 층에 두면 전제가 결과 뒤에 오게 되어 늦다 — 실무자가
+    개선율을 먼저 읽고 "거점만 옮기면 이렇게 되나"로 굳힌 다음에야 전제를 만난다.
+
+    **두 번째 문장이 이 블록의 핵심이다.** "증차해서 좋아진 것 아니냐"에 답하는
+    자리다 — 10대는 모든 후보에 똑같이 들어가므로 후보별 차이는 위치에서만 나온다
+    (A-10 · `resolve_placement` 이 넘겨받은 배속을 언제나 10 으로 덮는다).
+
+    **경고가 아니다.** `.warn` 은 "이 후보를 조심하라"는 말인데 이건 어느 후보에나
+    같은 조건이라, 색을 달리해 성격을 가른다.
+    """
+    f = fleet_effect()
+    wd, wke = f["weekday"], f["weekend"]
+    help_txt = SCENARIO_HELP.format(wke_base=wke["base"], wke_after=wke["after"],
+                                    wke_new=wke["new_depot"])
+    st.markdown(
+        '<div class="premise">'
+        f'<b>이 거점에 차량 {S.NEW_DEPOT_VEHICLES}대를 증차했을 때의 결과입니다.</b> '
+        f'기존 {len(load.load_depots())}개 차고지 배속은 그대로입니다 '
+        f'(평일 {wd["base"]} → {wd["after"]}대, 이 거점이 {wd["new_depot"]}대).'
+        f'<span class="qmark" title="{help_txt}">?</span>'
+        '<br>'
+        f'모든 후보에 같은 {S.NEW_DEPOT_VEHICLES}대를 넣었으므로 '
+        '<b>후보별 차이는 위치에서만 나옵니다.</b>'
+        '</div>', unsafe_allow_html=True)
 
 
 def sim_dong_panel(cand_id: int, row) -> None:
@@ -1377,12 +1638,18 @@ def render_sim_page() -> None:
                 unsafe_allow_html=True)
 
     candidate_picker(st.sidebar)
+
+    row = placement_row(ss.sim_cand) if ss.sim_cand is not None else None
+    # 분포는 **후보 목록 아래**다. 고른 후보가 있어야 표식을 찍을 수 있다.
+    if row is not None:
+        st.sidebar.divider()
+        distribution_panel(st.sidebar, row)
+
     st.sidebar.divider()
     if st.sidebar.button("←  지도로 돌아가기", type="secondary"):
         ss.page = 2 if ss.selected else 1
         st.rerun()
 
-    row = placement_row(ss.sim_cand) if ss.sim_cand is not None else None
     if row is None:
         st.markdown(
             '<div class="panel"><div class="warn"><b>결과가 없습니다</b><br>'
@@ -1412,6 +1679,9 @@ def render_sim_page() -> None:
               help="3km 안에서 줄어든 대기 시간을 전부 더한 값. 한 달 기준입니다.")
     m4.metric("픽업 before → after",
               f"{row['before']:.2f} → {row['after']:.2f}분")
+
+    # **전제는 결과 바로 뒤, 지도보다 앞이다.** 아래 경고들과 같은 층에 두면 늦다.
+    sim_scenario(row)
 
     left, right = st.columns([4, 1], gap="medium")
 

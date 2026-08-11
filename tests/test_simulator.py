@@ -365,3 +365,54 @@ def test_real_calls_run_and_stay_sane():
         g = g.sort_values("boarded_at")
         assert (g["boarded_at"].to_numpy()[1:]
                 >= g["alighted_at"].to_numpy()[:-1]).all()
+
+
+# ─────────────────────────────────────────────────────────────
+# 민감도 손잡이 — 기본값이 기존 동작을 바꾸지 않는가
+# ─────────────────────────────────────────────────────────────
+
+def test_predawn_radius_defaults_to_night(matrix):
+    """평일 심야 반경을 따로 뗐어도 **기본값은 야간과 같아야 한다**(A-17).
+
+    갈라 둔 것은 민감도로 갈아끼우기 위해서지 동작을 바꾸려는 게 아니다.
+    갈아끼우면 **평일 심야만** 움직이고 주말 심야·저녁은 그대로여야 한다.
+    """
+    calls = _synthetic_calls(4, ("사직동", "혜화동"))
+    base = S.CallTaxiSim(calls, _depots(), matrix)
+    tight = S.CallTaxiSim(calls, _depots(), matrix, radius_predawn=7.0)
+
+    predawn, evening = 3 * 60.0, 21 * 60.0
+    assert base._radius_km(3, 0, predawn) == S.DISPATCH_RADIUS_NIGHT
+    assert tight._radius_km(3, 0, predawn) == 7.0
+    # 원문에 있는 구간은 손대지 않는다 — 주말 심야와 19시 이후
+    for sim in (base, tight):
+        assert sim._radius_km(3, 1, predawn) == S.DISPATCH_RADIUS_NIGHT
+        assert sim._radius_km(21, 0, evening) == S.DISPATCH_RADIUS_NIGHT
+        assert sim._radius_km(10, 0, 10 * 60.0) == S.DISPATCH_RADIUS_DAY
+
+
+def test_score_weights_default_to_module_constant(matrix):
+    """`score_w` 를 안 주면 `SCORE_W` 그대로여야 한다 — 기본 경로 불변."""
+    calls = _synthetic_calls(4, ("사직동", "혜화동"))
+    assert S.CallTaxiSim(calls, _depots(), matrix).score_w == S.SCORE_W
+    w = {"order": 12.0, "wait": 28.0, "dist": 50.0}
+    assert S.CallTaxiSim(calls, _depots(), matrix, score_w=w).score_w == w
+    # 인스턴스 값이지 모듈 상수를 덮어쓰는 게 아니다(설정 간 오염 금지)
+    assert S.SCORE_W == {"order": 15.0, "wait": 35.0, "dist": 40.0}
+
+
+def test_new_knobs_leave_default_run_unchanged(matrix, monkeypatch):
+    """기본값을 명시로 넘긴 실행과 생략한 실행이 **같아야 한다.**
+
+    민감도를 붙이면서 기존 244곳 결과가 재현되지 않으면 그 결과 전체를 다시
+    돌려야 한다. 여기가 그 회귀를 막는 자리다.
+    """
+    monkeypatch.setattr(S, "FLEET_WEEKDAY", 3)
+    monkeypatch.setattr(S, "FLEET_WEEKEND", 3)
+    calls = _synthetic_calls(30, ("사직동", "혜화동"))
+
+    a = S.run_placement(None, calls, _depots(), matrix)
+    b = S.run_placement(None, calls, _depots(), matrix,
+                        score_w=S.SCORE_W,
+                        radius_predawn=S.DISPATCH_RADIUS_NIGHT)
+    pd.testing.assert_frame_equal(a, b)

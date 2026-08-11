@@ -9,6 +9,9 @@
 그 문구는 08.10 에 걷어냈지만 **검사는 남긴다** — 로더가 출처의 메타데이터를
 잃는 것 자체가 버그이고, 다음에 누가 읽을 때 또 같은 자리에서 터진다.
 """
+from pathlib import Path
+
+import numpy as np
 import pytest
 
 pytest.importorskip("streamlit", reason="대시보드 의존성 없음")
@@ -222,3 +225,213 @@ def test_candidate_options_sort_and_flag(placement):
     for _, lab in by_rate[:5]:
         assert not lab.lstrip().split(".")[0].isdigit()
         assert "위" not in lab
+
+
+# ─────────────────────────────────────────────────────────────
+# 3페이지 — 시나리오 전제 · 분포 · 문구
+# ─────────────────────────────────────────────────────────────
+
+def test_fleet_effect_matches_the_simulator():
+    """전제 블록의 숫자는 **화면에 적은 값이 아니라 계산한 값**이어야 한다.
+
+    574/582/8 을 문자열로 박아 두면 `NEW_DEPOT_VEHICLES`·`FLEET_WEEKDAY`·차고지
+    정원이 바뀔 때 조용히 어긋난다. `run_placement` 이 하는 계산과 같은지 본다.
+    """
+    import simulator as S
+    import load as L
+
+    f = D.fleet_effect.__wrapped__()
+    dep = L.load_depots()
+    assert f["cap_base"] == int(dep["capacity"].sum())
+    assert f["cap_new"] == f["cap_base"] + S.NEW_DEPOT_VEHICLES
+
+    for tag, base in (("weekday", S.FLEET_WEEKDAY), ("weekend", S.FLEET_WEEKEND)):
+        got = f[tag]
+        assert got["base"] == base
+        assert got["after"] == int(round(base * f["scale"]))
+        assert got["new_depot"] >= 1
+        # A-10 — 기존 44곳 배속은 건드리지 않는다. 이게 깨지면 전제 문장이 거짓이 된다
+        assert got["changed"] == 0, "기존 거점 배분이 바뀌면 '그대로입니다'가 거짓이다"
+
+
+def test_position_text_never_prints_a_lying_percent():
+    """양 끝에서 **백분율이 거짓말을 한다** — 그 구간만 말로 바꾼다.
+
+    0% 는 "아무것도 아닌 건가"로 읽히고, 100% 는 **최대치로 읽혀 뜻이 정반대로
+    전달된다**(실제로는 개선이 가장 작은 쪽 끝이다). 둘 다 화면에 나가면 안 된다.
+    """
+    import re
+    plain = lambda s: re.sub(r"<[^>]+>", "", s)  # noqa: E731 — 굵게 표시를 걷어낸다
+    v = np.linspace(-8.0, -1.0, 244)
+
+    best = plain(D._position_text(v, -8.0, "개선"))
+    worst = plain(D._position_text(v, -1.0, "개선"))
+    assert best == "개선이 가장 큰 쪽 끝입니다"
+    assert worst == "개선이 가장 작은 쪽 끝입니다"
+    assert "%" not in best and "%" not in worst
+
+    # 사이는 백분율 그대로. 0%·100% 는 어디서도 나오지 않는다
+    for cur in v:
+        t = plain(D._position_text(v, float(cur), "개선"))
+        assert "약 0%" not in t and "약 100%" not in t
+    assert "약 50% 지점" in plain(D._position_text(v, float(np.median(v)), "개선"))
+
+
+def test_subject_particle_matches_the_final_consonant():
+    """「수혜이」 같은 조사가 화면에 나가지 않는다 — 받침으로 갈린다."""
+    assert D._subject("개선") == "개선이"      # 받침 ㄴ
+    assert D._subject("수혜") == "수혜가"      # 받침 없음
+    assert D._subject("절감") == "절감이"
+    assert D._subject("대기") == "대기가"
+    assert D._subject("A") == "A이"            # 한글이 아니면 조용히 넘어간다
+
+
+def test_distribution_marker_sits_on_the_candidate(placement):
+    """표식이 그 후보의 값에 찍히고, **순위 번호는 어디에도 없다.**"""
+    rate = placement["rate_pct"].to_numpy(float)
+    cur = float(placement.sort_values("rate_pct").iloc[3]["rate_pct"])
+    fig = D._dist_fig(rate, cur, D._label_pct)
+
+    lines = [s for s in fig.layout.shapes if s.type == "line"]
+    assert len(lines) == 1 and lines[0].x0 == pytest.approx(cur)
+    marker = [a for a in fig.layout.annotations if a.yanchor == "bottom"]
+    assert [a.text for a in marker] == ["이 후보"], "순위·등수 표기가 붙으면 안 된다"
+    # y축은 통째로 지운다 — 도수는 세는 값이 아니라 모양이다
+    assert fig.layout.yaxis.visible is False
+
+
+def test_both_distributions_label_their_ends(placement):
+    """**두 차트 모두** 양 끝 값을 보인다 — 축이 없으면 분포의 폭을 모른다.
+
+    총절감만 축이 사라졌던 원인은 눈금이 값에 **가운데 정렬**돼 넓은 라벨
+    (`-2,954`)이 2px 여백에서 잘렸기 때문이다. 안쪽 정렬 주석으로 바꿨으니
+    **폭과 무관하게** 두 끝이 남아야 한다.
+    """
+    rate = placement["rate_pct"].to_numpy(float)
+    total = placement["total_delta_min"].to_numpy(float)
+    scale = float(np.abs(total).max()) >= 1000
+
+    for values, label in ((rate, D._label_pct),
+                          (total, lambda v: D._label_min(v, scale))):
+        fig = D._dist_fig(values, float(np.median(values)), label)
+        ends = [a for a in fig.layout.annotations if a.yanchor == "top"]
+        assert len(ends) == 2, "양 끝 라벨이 둘 다 있어야 한다"
+        assert [a.xanchor for a in ends] == ["left", "right"], \
+            "안쪽 정렬이 아니면 좁은 여백에서 잘린다"
+        assert ends[0].x == pytest.approx(values.min())
+        assert ends[1].x == pytest.approx(values.max())
+        assert all(a.text.strip() for a in ends)
+        # 눈금은 끄고 주석만 쓴다 — 둘 다 켜면 라벨이 겹친다
+        assert fig.layout.xaxis.showticklabels is False
+        # 라벨이 앉을 아래 여백이 있어야 한다
+        assert fig.layout.margin.b >= 14
+
+
+def test_minute_labels_shrink_but_keep_one_unit():
+    """네 자리 분은 천 단위로 줄이고, **양 끝의 단위를 섞지 않는다.**
+
+    한쪽만 천 단위면 폭을 눈으로 견줄 수 없다. 세 자리면 그대로가 더 읽기 쉽다.
+    """
+    assert D._label_min(-2954.4, True) == "-3.0천분"
+    assert D._label_min(-704.8, True) == "-0.7천분"      # 섞지 않는다
+    assert D._label_min(-704.8, False) == "-705분"
+    # 사이드바 폭 기준 — 축약본이 원본보다 짧아야 의미가 있다
+    assert len(D._label_min(-2954.4, True)) < len(D._label_min(-2954.4, False))
+    assert D._label_pct(-8.57) == "-8.6%"
+
+
+def _shown_strings(func_name: str = None) -> list:
+    """화면에 나가는 문자열만 — 주석·도크스트링은 뺀다.
+
+    주석은 **왜 그렇게 적었는지**를 남기는 자리라 옛 문구를 인용할 수밖에 없다.
+    본문 검색으로 금지어를 찾으면 그 인용이 걸려 정정 기록을 못 남기게 된다.
+    """
+    import ast
+    tree = ast.parse(Path(D.__file__).read_text(encoding="utf-8"))
+    if func_name:
+        tree = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == func_name)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)):
+            d = ast.get_docstring(node, clean=False)
+            if d:
+                docs.add(d)
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and n.value not in docs]
+
+
+def test_screen_text_has_no_one_sided_bias_wording():
+    """화면 문구가 편의 방향을 단정하지 않는다(08.10 정정).
+
+    `BIAS_NOTE` 는 상수로만 두고 실제 화면은 `sim_warnings` 가 낸다 — 상수만
+    고치고 화면을 안 고치면 이 검사가 잡는다(실제로 그렇게 빠뜨렸었다).
+    """
+    shown = "".join(_shown_strings("sim_warnings"))
+    assert "양방향 편의" in shown
+    assert "후보 간 비교로 읽으십시오" in shown
+    for banned in ("실제보다 작게", "과소평가", "더 클 가능성"):
+        assert banned not in shown, f"화면에 방향을 단정하는 표현이 남았다: {banned}"
+
+
+def test_scenario_text_carries_the_location_only_claim():
+    """전제 블록의 두 번째 문장 — '후보별 차이는 위치에서만 나온다'.
+
+    이게 "증차해서 좋아진 것 아니냐"에 답하는 자리다. 빠지면 전제 블록이
+    조건 나열로만 남는다.
+    """
+    shown = "".join(_shown_strings("sim_scenario"))
+    assert "위치에서만 나옵니다" in shown
+    assert "그대로입니다" in shown
+    # 주말 단서는 본문이 아니라 물음표 도움말로 접는다 — 본문에 두면 길다
+    assert "주말" not in shown
+    assert "주말" in D.SCENARIO_HELP
+    # **차감 사유는 화면 어디에도 없다**(08.10) — 설계 근거는 문서 몫이다.
+    # 툴팁은 부연을 접는 자리이지 근거를 옮겨 놓는 자리가 아니다.
+    assert "차감" not in D.SCENARIO_HELP and "차감" not in shown
+
+
+def test_metric_roles_are_body_ink_not_grey():
+    """「개선율 — … / 총절감 — …」 은 **본문 색**이어야 한다.
+
+    회색 주석으로 두면 눈이 지나치는데, **두 지표를 함께 봐야 한다**는 것이 좌측
+    패널의 요점이다. 목록과 분포 **양쪽 모두** 그래야 한다 — 한쪽만 고치면 같은
+    문장이 화면에서 두 무게로 보인다.
+
+    뒤따르는 백분위·부연은 회색 그대로다. 전부 짙게 하면 아무것도 도드라지지 않는다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    for fn in ("candidate_picker", "distribution_panel"):
+        shown = _shown_strings(fn)
+        assert any("개선율" in s and "—" in s for s in shown), f"{fn}: 역할 표기가 없다"
+        body = src.split(f"def {fn}", 1)[1].split("\ndef ", 1)[0]
+        assert "role_html(" in body, f"{fn}: 역할 표기가 아직 회색(.note)이다"
+        # 회색도 함께 남아야 한다 — 전부 짙게 하면 위계가 사라진다
+        assert "note_html(" in body, f"{fn}: 부연까지 본문 색이 됐다"
+
+    # `.role` 이 실제로 본문 잉크색이어야 한다 — 클래스만 있고 회색이면 소용없다
+    role_css = D.CSS.split(".role {", 1)[1].split("}", 1)[0]
+    assert f"color: {D.INK}" in role_css
+    assert D.INK not in D.CSS.split(".note {", 1)[1].split("}", 1)[0]
+
+
+def test_no_denial_of_a_claim_never_made():
+    """"등수가 아닙니다" 같은 부정문을 화면에 두지 않는다(08.10).
+
+    숫자에 등수가 안 붙어 있으면 그것으로 이미 말이 된다 — 아니라고 굳이 적으면
+    없는 기대를 만들어 놓고 부정하는 꼴이다. 원칙은 주석과 명세에 남는다.
+    """
+    shown = "".join(_shown_strings("distribution_panel"))
+    assert "등수가 아닙니다" not in shown
+
+
+def test_no_top_n_wording_on_screen():
+    """'상위 N곳' 류 표현이 화면에 없다.
+
+    근접 강화 설정에서 상위권 간격이 4.12 → 0.59%p 로 좁아져, 상위권이 뚜렷하다는
+    인상 자체가 배차 가중치에 의존한다(docs/model_flow.md 「민감도」). 주석·
+    도크스트링은 근거를 적는 자리라 검사 대상에서 뺀다 — **화면에 나가는 문자열만** 본다.
+    """
+    for s in _shown_strings():
+        assert "상위 " not in s, f"화면 문자열에 '상위 N' 표현이 있다: {s[:60]}"

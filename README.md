@@ -68,12 +68,19 @@ $env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
 | 파일 | 용도 |
 |---|---|
 | **calls_2025_replay.csv** | **콜 원본 — 특장차 한정본 139.1만 행.** 시뮬 입력 · 이동시간 · 유휴 구간 · 조 편성이 전부 이 파일 하나를 본다. 원본 명세에서 흡수한 사실은 [docs/calibration.md](docs/calibration.md) 첫 절 |
-| 차고지44_좌표.csv | 현행 거점 44개 위치 |
+| 차고지44_좌표.csv | 현행 거점 44개 위치 + **배속 정원**(`차량대수` 합 691) — 면수가 아니다(아래) |
 | 행정동_중심점.csv | 동 중심 좌표 |
 | 서울시_장애인_통계_2025.csv | 동별 등록 장애인(이용률 분모) |
 | HangJeongDong_ver20230701.geojson | 동 경계 |
 | 동별_거점용량_접근성.csv | 과소공급 동(3km내 10대 이하) |
 | sim_pool_v4.csv | **거점 후보 풀 639곳 · 55,798면** — 옥외 348곳만 후보로 쓰고(가정 A-15), 그중 동에 배정된 244곳이 시뮬에 들어간다(candidates.py) |
+
+**⚠ 배속 정원 691 과 공단 공개 파일의 699 는 다른 양이다.** 공단
+`서울시설공단_장애인콜택시 차고지 정보_20250724.csv` 의 `주차대수`(합 **699**)는
+**면수**이고, 저장소가 쓰는 `차량대수`(합 **691**)는 **배속 정원**이다. 44곳 전부
+이름·주소가 일치하지만 **11곳에서 값이 갈리며**, 시차 운행(A-09) 때문에 배속이 면수를
+넘을 수 있다(종묘 46대 vs 34면). 대조 표는
+[docs/calibration.md](docs/calibration.md) 「차고지 배속 정원」 절.
 
 `공영주차장_목록.csv` / `시영주차장_목록.csv` 는 더 이상 코드가 읽지 않는다 —
 후보 풀 파이프라인의 입력으로 흡수됐고 저장소는 그 산출물(`sim_pool_v4.csv`)만 본다.
@@ -110,6 +117,10 @@ python src/simulator.py
 # 후보 평가 (244곳 × 시드 3회 → 개선율·대비 구간·총절감)
 python src/evaluate.py
 
+# 가정 민감도 (A-01·A-17·A-18 — 대표 후보 9곳 × 설정 6개 → 순위 상관)
+python src/sensitivity.py
+python src/sensitivity.py --report    # 재생 없이 보고만
+
 # 대시보드 (진단 화면 + 후보 결과)
 streamlit run src/dashboard.py
 
@@ -136,6 +147,7 @@ simulation/
 │  ├ candidates.py   # 동별 거점 후보 배정(후보 풀 → 행정동 426개)
 │  ├ simulator.py    # 시뮬 엔진(SimPy)
 │  ├ evaluate.py     # 후보 평가 실행(244곳 × 시드 3회, 중단·재개)
+│  ├ sensitivity.py  # 가정 민감도(A-01·A-17·A-18 — 대표 9곳 × 설정 6개)
 │  └ dashboard.py    # Streamlit 대시보드(진단 + 후보 결과)
 ├ docs/
 │  ├ assa_log.md         # 가정 대장(A-01~A-16) — 가정 부호의 정본
@@ -155,7 +167,8 @@ simulation/
    ├ patience_summary.csv        # 인내심 추정 요약 1행
    ├ dong_candidates.csv         # 동 426개 × 배정된 후보(383동 · 244곳) — src/candidates.py 산출
    ├ placement_eval.csv          # 후보 평가 원값(244곳 × 시드 3회 = 732행) — src/evaluate.py 산출
-   └ placement_grades.csv        # 후보별 개선율·대비 구간·총절감·겹침 수
+   ├ placement_grades.csv        # 후보별 개선율·대비 구간·총절감·겹침 수
+   └ sensitivity_eval.csv        # 가정 민감도 원값(9곳 × 설정 6개 = 54행) — src/sensitivity.py 산출
 ```
 
 지표 함수는 파일을 읽지 않고 데이터프레임만 받는다. 실측 콜(진단)과 시뮬 로그(예측)에

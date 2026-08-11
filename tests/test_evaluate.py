@@ -189,11 +189,19 @@ def test_grades_are_monotone_in_rate():
 
 
 def test_report_carries_the_warnings():
-    """보고 문구에 '우열을 가릴 수 없다'와 과소평가가 있어야 한다."""
+    """보고 문구에 '우열을 가릴 수 없다'와 **양방향 편의** 경고가 있어야 한다.
+
+    편의가 한쪽이라고 적으면 안 된다 — A-19·A-20 은 절감을 줄이는 쪽이고 θ 를
+    두지 않은 것(A-01)은 늘리는 쪽이라 상쇄 크기를 모른다(08.10 정정). 그래서
+    "과소평가"·"더 클 가능성" 같은 방향을 단정하는 표현이 **없어야** 한다.
+    """
     g = E.assign_grades(_rows([(1, [-5.0, -5.1, -4.9]), (2, [-1.0, -1.1, -0.9])]))
     txt = E.candidate_report(g)
     assert "우열을 가릴 수 없다" in txt
-    assert "과소평가" in txt
+    assert "양방향 편의" in txt
+    assert "후보 간 비교로만 읽는다" in txt
+    assert "과소평가" not in txt
+    assert "더 클 가능성" not in txt
 
 
 # ─────────────────────────────────────────────────────────────

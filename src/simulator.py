@@ -68,6 +68,12 @@ DISPATCH_RADIUS_WEEKEND = 8.0    # 주말 06:30~19:00
 DISPATCH_RADIUS_NIGHT = 12.0     # 그 외(19:00~익일 06:30)
 DAY_START_MIN, DAY_END_MIN = 6 * 60 + 30, 19 * 60
 
+# **평일 심야(00:00~06:30) 반경만 따로 뗀 손잡이**(A-17). 기본값은 야간과 같은
+# 12km 라 `_radius_km` 의 동작이 바뀌지 않는다 — 민감도에서 7km 로 갈아끼우려고
+# 이름만 갈라 둔 것이다. 원문이 이 구간을 적지 않아 어느 쪽도 근거가 없고,
+# 주간(7km)으로 읽으면 근무 차량 6~8대뿐인 새벽에 반경이 가장 좁아진다.
+DISPATCH_RADIUS_PREDAWN = DISPATCH_RADIUS_NIGHT
+
 # 배차 점수 가중치(합 90) — 위 이용 안내 원문 그대로다.
 #   order   접수순서   먼저 접수된 콜이 높다
 #   wait    경과대기   오래 기다린 콜이 높다
@@ -515,6 +521,8 @@ class CallTaxiSim:
                  after_assign_cancel_p: float = AFTER_ASSIGN_CANCEL_P,
                  candidate_keep_p: float = CANDIDATE_KEEP_P,
                  candidate_filter_mode: str = CANDIDATE_FILTER_MODE,
+                 score_w: dict = None,
+                 radius_predawn: float = DISPATCH_RADIUS_PREDAWN,
                  fleet_scale: float = 1.0):
         self.env = simpy.Environment()
         # 이 생성기는 **차량 쪽 표본만** 쓴다(조 편성·휴게 길이). 콜 쪽은 콜 ID
@@ -528,6 +536,10 @@ class CallTaxiSim:
         self.after_assign_cancel_p = float(after_assign_cancel_p)
         self.candidate_keep_p = float(candidate_keep_p)
         self.candidate_filter_mode = candidate_filter_mode
+        # 배차 점수 가중치·평일 심야 반경은 민감도 대상이라 인스턴스 값으로 둔다
+        # (A-18 · A-17). 넘기지 않으면 모듈 기본값 그대로다.
+        self.score_w = dict(score_w or SCORE_W)
+        self.radius_predawn = float(radius_predawn)
         # 신규 거점은 **증차**다(A-10) — 기존 배속을 나눠 갖는 것이 아니다.
         # 배속 정원이 691 → 701 로 늘면 그 날 나오는 대수도 같은 비율로 는다.
         self.fleet_scale = float(fleet_scale)
@@ -644,6 +656,11 @@ class CallTaxiSim:
         tod = minutes % 1440.0
         if DAY_START_MIN <= tod < DAY_END_MIN:
             return DISPATCH_RADIUS_WEEKEND if weekend else DISPATCH_RADIUS_DAY
+        # 평일 심야(00:00~06:30)만 따로 뗀다 — 원문에 없는 구간이라 12km 로 본
+        # 것이 A-17 이고, 그 가정 자체가 민감도 대상이다. 주말 심야와 19시 이후는
+        # 원문에 있으므로 건드리지 않는다.
+        if not weekend and tod < DAY_START_MIN:
+            return self.radius_predawn
         return DISPATCH_RADIUS_NIGHT
 
     def _travel(self, o: int, d: int, pi: int, wi: int) -> float:
@@ -705,9 +722,10 @@ class CallTaxiSim:
         minutes = self.mx.minutes[pi, wknd, veh.dong, origins[idx]]
         recv = np.array([self._queue[i].received for i in idx])
 
-        score = (SCORE_W["order"] * _rank_score(-recv)
-                 + SCORE_W["wait"] * _minmax(now - recv)
-                 + SCORE_W["dist"] * (1.0 - _minmax(minutes)))
+        w = self.score_w
+        score = (w["order"] * _rank_score(-recv)
+                 + w["wait"] * _minmax(now - recv)
+                 + w["dist"] * (1.0 - _minmax(minutes)))
         self._assign(veh, self._queue[int(idx[int(np.argmax(score))])], now)
         self.stats["dispatch_on_idle"] += 1
         return True
@@ -717,6 +735,10 @@ class CallTaxiSim:
 
         콜 하나만 놓고 보면 접수순서·경과대기 항이 상수라 **거리항만 순위를
         가른다.** 점수식을 그대로 돌려도 결과가 같아 이동시간 최소로 줄였다.
+
+        **그래서 `score_w` 를 바꿔도 이쪽은 변하지 않는다**(A-18 민감도). 가중치
+        손잡이가 무는 곳은 차량 쪽 매칭(`_match_for_vehicle`)뿐이다 — 후보 집합이
+        콜 여럿일 때만 세 항이 함께 순위를 만든다.
         """
         now = self.env.now
         hour, wknd = self._clock(now)
@@ -950,7 +972,9 @@ def run_placement(placement, calls: pd.DataFrame, depots: pd.DataFrame,
                   idle_break: IdleBreak = None,
                   after_assign_cancel_p: float = AFTER_ASSIGN_CANCEL_P,
                   candidate_keep_p: float = CANDIDATE_KEEP_P,
-                  candidate_filter_mode: str = CANDIDATE_FILTER_MODE) -> pd.DataFrame:
+                  candidate_filter_mode: str = CANDIDATE_FILTER_MODE,
+                  score_w: dict = None,
+                  radius_predawn: float = DISPATCH_RADIUS_PREDAWN) -> pd.DataFrame:
     """배치안 하나를 평가. 반환은 `metrics` 에 그대로 넣을 수 있는 콜 로그다.
 
     placement 는 `resolve_placement` 가 받는 형식(None / cand_id / dict / DataFrame).
@@ -973,6 +997,7 @@ def run_placement(placement, calls: pd.DataFrame, depots: pd.DataFrame,
                       after_assign_cancel_p=after_assign_cancel_p,
                       candidate_keep_p=candidate_keep_p,
                       candidate_filter_mode=candidate_filter_mode,
+                      score_w=score_w, radius_predawn=radius_predawn,
                       fleet_scale=scale)
     return sim.run()
 
