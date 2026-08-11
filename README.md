@@ -82,13 +82,6 @@ $env:DATA_DIR = "D:\calltaxi"     # Windows PowerShell
 넘을 수 있다(종묘 46대 vs 34면). 대조 표는
 [docs/calibration.md](docs/calibration.md) 「차고지 배속 정원」 절.
 
-`공영주차장_목록.csv` / `시영주차장_목록.csv` 는 더 이상 코드가 읽지 않는다 —
-후보 풀 파이프라인의 입력으로 흡수됐고 저장소는 그 산출물(`sim_pool_v4.csv`)만 본다.
-
-`서울시설공단_장애인콜택시 탑승내역_20251231.csv` 와 `calltaxi_2025_merged.csv` 도
-더 이상 읽지 않는다 — **`calls_2025_replay.csv` 가 둘을 대체한다**(A 마스터에 차량번호를
-붙이고 특장차만 남긴 정제본). 임차택시를 뺀 이유는 가정 A-16 을 볼 것: 차고지 기반
-교대 운영이 아니라 거점 배치의 영향을 받지 않는다.
 
 ## 실행
 
