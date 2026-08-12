@@ -49,6 +49,49 @@ def test_data_dir_env_expands_user(monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────
+# 저장소 동봉 자료(assets/) — clone 만으로 대시보드가 뜨게 하는 최소 집합
+# ─────────────────────────────────────────────────────────────
+
+def test_assets_ship_the_files_the_dashboard_needs():
+    """대시보드가 data/ 없이 뜨려면 이 셋이 저장소에 있어야 한다."""
+    for name in ("차고지44_좌표.csv", "sim_pool_v4.csv",
+                 load.DISPLAY_BOUNDARY):
+        p = load.ASSETS_DIR / name
+        assert p.exists(), f"{name} 이 assets/ 에 없다 — clone 만으로 안 뜬다"
+    # 콜 원본은 개인정보라 절대 동봉하지 않는다
+    assert not (load.ASSETS_DIR / load.CALLS_FILE).exists(), \
+        "콜 원본이 저장소에 들어왔다"
+
+
+def test_data_wins_over_asset_copy(tmp_path, monkeypatch):
+    """원본이 있으면 원본을 쓴다 — 사본이 낡아 조용히 옛 값을 읽으면 안 된다."""
+    monkeypatch.setattr(load, "DATA_DIR", tmp_path)
+    real = tmp_path / "sim_pool_v4.csv"
+    real.write_text("x", encoding="utf-8")
+    assert load.data_or_asset("sim_pool_v4.csv") == real
+    # 없으면 저장소 사본으로 내려간다
+    assert load.data_or_asset("차고지44_좌표.csv") == \
+        load.ASSETS_DIR / "차고지44_좌표.csv"
+
+
+def test_boundary_for_calculation_never_falls_back(tmp_path, monkeypatch):
+    """**계산용 경계는 폴백하지 않는다.**
+
+    `assets/` 사본은 0.0002도(약 22m) 단순화본이라 면적(`geometry.area`)·
+    `sjoin`·EPSG:5179 격자에 쓰면 값이 틀린다 — `candidates.py` 가 그 셋을 전부
+    한다. data/ 가 없으면 **조용히 대체하지 말고 그대로 실패해야** 한다.
+    """
+    monkeypatch.setattr(load, "DATA_DIR", tmp_path)
+    with pytest.raises(Exception):
+        load.load_dong(with_boundary=True)
+
+    src = Path(load.__file__).read_text(encoding="utf-8")
+    body = src.split("def load_dong", 1)[1].split("\ndef ", 1)[0]
+    assert "data_or_asset" not in body, \
+        "계산용 경계 로더가 저장소 사본으로 폴백한다"
+
+
+# ─────────────────────────────────────────────────────────────
 # 동 이름 정규화
 # ─────────────────────────────────────────────────────────────
 

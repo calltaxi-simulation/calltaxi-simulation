@@ -191,9 +191,12 @@ def load_boundary():
     """단순화한 서울 동 경계. (geojson dict, 속성표) 로 돌려준다.
 
     GeoDataFrame 은 캐시 직렬화가 무거워 dict + DataFrame 으로 쪼갠다.
+
+    **표시 전용 경계다**(`load.load_display_boundary`). `data/` 에 원본이 있으면
+    원본을 단순화하고, 없으면 저장소 사본(`assets/`)을 쓴다 — clone 만으로 지도가
+    뜨게 하려는 것이다. 면적·거리 계산은 이 경계를 쓰면 안 된다(22m 단순화).
     """
-    gdf = load.load_dong(with_boundary=True).copy()
-    gdf["geometry"] = gdf.geometry.simplify(SIMPLIFY_TOL, preserve_topology=True)
+    gdf = load.load_display_boundary().copy()
     gdf["base"] = gdf["dong_canon"].map(load._base_dong)
     gj = json.loads(gdf.to_json())
     for feat, cd in zip(gj["features"], gdf["adm_cd2"]):
