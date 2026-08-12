@@ -494,10 +494,17 @@ def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
     **툴팁은 부연을 접는 자리이지 근거를 옮겨 놓는 자리가 아니다**(명세 3절).
     숫자를 밖으로 인용할 때 반드시 따라가야 하는 말이라 접으면 안 된다.
     """
-    assert "A-19" in D.TOTAL_WAIT_NOTE and "후보 간 비교" in D.TOTAL_WAIT_NOTE
-    assert D.TOTAL_WAIT_NOTE not in D.TOTAL_WAIT_HELP
+    # **어느 문자열이 나르는지는 묻지 않는다 — 화면에 있는지를 묻는다.**
+    # A-19 는 실측 대비 줄이 수치와 함께 말하고(08.12), 인용 경고는 마지막
+    # 문단이 맡는다. 예전에는 둘 다 TOTAL_WAIT_NOTE 한 문장에 있었는데 바로 위
+    # 줄과 같은 말을 반복해 정작 지켜야 할 경고가 묻혔다.
+    shown = "".join(_shown_strings("sim_total_wait"))
+    assert "A-19" in shown, "매칭 미재현 단서가 화면에 없다"
+    assert "후보 간 비교" in D.TOTAL_WAIT_NOTE, "인용 경고가 사라졌다"
+    assert D.TOTAL_WAIT_NOTE not in D.TOTAL_WAIT_HELP, "경고를 툴팁으로 옮겼다"
     # 물음표에는 정의와 "정렬 기준은 픽업"만 들어간다
     assert "픽업" in D.TOTAL_WAIT_HELP
+    assert "A-19" not in D.TOTAL_WAIT_HELP, "근거를 툴팁에 접었다"
 
     src = Path(D.__file__).read_text(encoding="utf-8")
     body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
@@ -541,6 +548,38 @@ def test_before_after_is_not_shown_twice():
         assert label in shown, f"판정 카드 「{label}」 이 사라졌다"
 
 
+def test_comparison_block_is_one_markdown_call_in_a_panel(monkeypatch):
+    """테두리 블록을 **한 번의 markdown** 으로 낸다 (명세 8절).
+
+    여는 태그만 따로 부르면 Streamlit 이 그 호출을 독립 요소로 감싸 빈 사각형이
+    생긴다. 안에 위젯이 없어야 묶을 수 있는데, σ 물음표는 위젯이 아니라 `title`
+    속성이라 문자열로 들어간다.
+
+    실측이 없어 개선율 한 줄로 돌아갈 때도 테두리는 같이 두른다 — 패널 안에서
+    이 블록만 테두리가 없으면 딸려 온 글로 보인다.
+    """
+    import pandas as pd
+    full = pd.Series({
+        "rate_total_pct": -10.99, "rate_total_sd": 1.31,
+        "before": 13.17, "after": 12.04, "rate_pct": -8.57,
+        "before_total": 18.67, "after_total": 16.62,
+        "obs_total_min": 42.27, "sim_obs_ratio": 0.44})
+    thin = full.copy()
+    thin["obs_total_min"] = float("nan")
+
+    for name, row in (("분+실측", full), ("개선율만", thin)):
+        calls = []
+        monkeypatch.setattr(D.st, "markdown", lambda *a, **k: calls.append(a[0]))
+        D.sim_total_wait(row)
+        assert len(calls) == 1, f"{name}: markdown 을 {len(calls)}번 불렀다"
+        html = calls[0]
+        assert html.startswith('<div class="panel">'), f"{name}: 테두리가 없다"
+        assert html.count("<div") == html.count("</div>"), \
+            f"{name}: div 가 짝이 안 맞아 빈 사각형이 생긴다"
+        # 위젯이 아니라 title 속성으로 들어가야 한 덩이로 묶인다
+        assert "qmark" in html and "title=" in html
+
+
 def test_comparison_block_sits_in_the_right_panel():
     """대비 블록은 **우측 패널**에서 지도 옆에 선다 (08.12).
 
@@ -570,9 +609,12 @@ def test_comparison_block_keeps_its_columns_when_narrow():
     assert "tabular-nums" in css, "자릿수 폭이 고정되지 않는다"
     assert "grid-column: 1 / -1" in css, "σ·실측 줄이 격자 전체를 쓰지 않는다"
     assert "@media" in css and "font-size" in css, "좁은 폭 대비가 없다"
-    # 지도와 패널 비율 — 1/5 로 돌아가면 값 줄이 꺾인다
+    # 배지가 접히면 그 줄만 높아져 정렬이 깨진다
+    assert ".wcmp .tag" in css and "nowrap" in css.split(".wcmp .tag", 1)[1][:120], \
+        "배지 안에서 줄이 접힐 수 있다"
+    # 지도와 패널 비율 — 좁히면 값 줄이 꺾인다
     body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
-    assert "st.columns([3, 1]" in body, "패널이 좁아져 정렬이 무너진다"
+    assert "st.columns([2, 1]" in body, "패널이 좁아져 정렬이 무너진다"
 
 
 def test_total_wait_row_is_silent_without_data(monkeypatch):

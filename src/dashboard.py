@@ -118,9 +118,11 @@ BIAS_NOTE = ("절감폭의 절대 크기는 양방향 편의를 안고 있다. �
 # 이 문장은 툴팁이 아니라 값 옆에 그대로 적는다 — **툴팁은 부연을 접는 자리이지
 # 근거를 옮겨 놓는 자리가 아니다**(명세 3절). 숫자를 인용할 때 반드시 따라가야
 # 하는 말이므로 접으면 안 된다.
-TOTAL_WAIT_NOTE = ("분 단위는 두 자의 차이를 보이려고 둔 값입니다. 시뮬은 매칭을 "
-                   "재현하지 못해 총 대기 절대값이 실측보다 짧으므로(A-19) "
-                   "절대값을 인용하지 말고 후보 간 비교로 읽으십시오.")
+#
+# **바로 위 실측 대비 줄과 겹치지 않게 줄였다**(08.12). "매칭을 재현하지 못해
+# 짧다"는 그 줄이 이미 수치와 함께 말한다 — 같은 말을 두 번 하면 아래 문장이
+# 읽히지 않고, 그러면 정작 지켜야 할 「인용하지 말라」가 묻힌다.
+TOTAL_WAIT_NOTE = "절대값을 인용하지 말고 후보 간 비교로 읽으십시오."
 # 물음표로 접는 쪽 — 두 지표가 무엇인지, 그리고 **순위 기준은 픽업 그대로**라는 것.
 # 총 대기 개선율이 픽업보다 크게 나오므로(1.3~2.2배) 정렬이 그쪽으로 바뀐 게
 # 아니냐는 물음이 생긴다. 기준을 옮기지 않은 이유는 model_flow 에 있다.
@@ -1087,30 +1089,43 @@ CSS = f"""
      정렬이 버티는 근거는 `tabular-nums` 다. 두 줄 모두 `NN.NN → NN.NN분` 로
      자릿수가 같아 폭이 같아진다. 개선율은 자릿수가 달라(−8.57 / −10.99) 별도
      칸으로 뽑아야 왼쪽 끝이 맞는다. */
-  .wcmp {{ font-size: .78rem; line-height: 1.6; color: #55524C;
-           margin: .1rem 0 .2rem; display: grid;
-           grid-template-columns: auto auto auto;
-           gap: .1rem .45rem; align-items: baseline;
+  /* 글자 크기는 「담당 동」 블록에 맞춘다 — 같은 패널 층이라 여기만 작으면
+     주석처럼 읽힌다. 라벨은 `.mlabel`(.78), 값은 `.mvalue`(.95) 와 같은 값이다.
+     값이 라벨보다 큰 것이 위계다. 개선율은 값과 같은 크기로 두되 굵기를 낮춰
+     before→after 가 먼저 눈에 들게 했다. */
+  .wcmp {{ font-size: .78rem; line-height: 1.55; color: #55524C;
+           margin: 0 0 .1rem; display: grid;
+           grid-template-columns: auto auto auto auto;
+           gap: .12rem .4rem; align-items: baseline;
            justify-content: start; }}
-  .wcmp .wlab {{ color: #8A867D; white-space: nowrap; }}
+  /* 「참고」 는 넷째 칸 — 줄 끝이다. 값 앞(라벨 칸)에 두면 라벨이 배지만큼
+     넓어져 픽업 줄의 화살표가 밀린다. 제 칸을 주면 값 칸이 흔들리지 않는다.
+     **배지 안에서 줄이 접히면 안 된다** — 접히면 그 줄만 높아져 정렬이 깨진다. */
+  .wcmp .tag {{ margin-right: 0; margin-left: .05rem; white-space: nowrap; }}
+  .wcmp .wlab {{ color: #6E6A62; white-space: nowrap; }}
   .wcmp .wval {{ color: {INK}; font-weight: 620; white-space: nowrap;
-                 font-variant-numeric: tabular-nums; }}
-  .wcmp .wrate {{ font-variant-numeric: tabular-nums; white-space: nowrap; }}
+                 font-size: .95rem; font-variant-numeric: tabular-nums; }}
+  .wcmp .wrate {{ font-size: .95rem; font-weight: 500; white-space: nowrap;
+                  font-variant-numeric: tabular-nums; }}
   /* σ·물음표 — 값 줄에 붙이면 좁은 폭에서 값을 밀어낸다. 아래로 내린다. */
-  .wcmp .wmeta {{ grid-column: 1 / -1; color: #949087; font-size: .72rem;
+  .wcmp .wmeta {{ grid-column: 1 / -1; color: #949087; font-size: .74rem;
                   font-variant-numeric: tabular-nums; }}
   /* 실측 대비 줄 — 격자 전체를 쓰고 한 칸 들여쓴다. 위 두 줄의 근거이지
      별개 항목이 아니라는 것을 들여쓰기로 말한다. 좁은 폭에서는 접히므로
      들여쓴 만큼 매달아(hanging indent) 이어지는 줄도 왼쪽이 맞게 둔다. */
-  .wcmp .wfoot {{ grid-column: 1 / -1; color: #8A867D; font-size: .73rem;
+  .wcmp .wfoot {{ grid-column: 1 / -1; color: #7A766E; font-size: .78rem;
+                  line-height: 1.5; margin-top: .1rem;
                   padding-left: .85rem; text-indent: -.85rem; }}
   .wcmp .wfoot b {{ color: #55524C; font-weight: 620;
                     font-variant-numeric: tabular-nums; }}
-  /* 창이 좁으면 패널도 좁아진다. 값 칸이 `nowrap` 이라 자리가 모자라면 넘치므로,
+  /* 창이 좁으면 패널도 좁아진다. 값 칸이 `nowrap` 이라 자리가 모자라면 배지가
+     아래로 접히는데, 접히면 그 줄만 높아져 두 줄의 정렬이 깨진다.
      **줄을 깨는 대신 글자를 줄인다** — 두 줄이 같은 칸에 서는 것이 이 블록의
-     전부라 그것만은 어느 폭에서도 지킨다. 1200px 에서 약 259 → 230px. */
-  @media (max-width: 1200px) {{
-    .wcmp {{ font-size: .72rem; column-gap: .3rem; }}
+     전부라 그것만은 어느 폭에서도 지킨다. */
+  @media (max-width: 1150px) {{
+    .wcmp {{ column-gap: .3rem; }}
+    .wcmp .wval, .wcmp .wrate {{ font-size: .84rem; }}
+    .wcmp .wlab, .wcmp .wfoot {{ font-size: .73rem; }}
   }}
 
   /* 물음표 — st.metric 의 `help` 아이콘과 같은 성격이다. 별도 요소를 만들지
@@ -1693,6 +1708,15 @@ def sim_total_wait(row) -> None:
     좁은 폭에서 두 줄의 세로 정렬이 무너지면 별개 지표 두 개로 읽혀 대비가
     죽는다. 그래서 값 칸을 셋으로 줄이고 σ·실측 줄을 아래로 내렸다(CSS `.wcmp`).
 
+    **테두리 있는 패널이다** — 「담당 동」과 같은 층이라 같은 모양이어야 패널
+    안에서 딸려 온 글로 보이지 않는다. 안에 위젯이 없어(σ 물음표도 `title`
+    속성이다) **한 번의 markdown 으로** 낼 수 있다(명세 8절).
+
+    **「참고」 꼬리표만 값 뒤다.** 명세의 일반 규칙은 값 앞인데(값을 읽고 나서
+    성격을 만나면 늦다), 여기서는 배지가 라벨 칸을 넓혀 픽업 줄의 화살표를
+    민다. 두 줄이 같은 칸에 서는 것이 이 블록의 전부라 정렬이 이긴다.
+    개선율 한 줄로 돌아가는 쪽은 정렬 문제가 없으므로 값 앞 그대로다.
+
     **왜 카드가 아닌가.** `st.metric` 을 한 장 더 두면 판정 지표 셋과 같은 무게로
     읽히는데, 이 값은 순위 기준이 아니다 — 목록 정렬도 분포도 픽업 그대로다.
     성격이 다른 것을 같은 모양으로 두면 화면이 "이것도 기준"이라고 말하게 된다.
@@ -1730,14 +1754,16 @@ def sim_total_wait(row) -> None:
     minutes_ok = all(v is not None and pd.notna(v) for v in (obs, bt, at))
 
     if not minutes_ok:
-        # 실측이나 분이 없으면 옛 형태 — 개선율 한 줄.
+        # 실측이나 분이 없으면 옛 형태 — 개선율 한 줄. 한 줄뿐이라 정렬 문제가
+        # 없으므로 꼬리표는 원래대로 값 앞이다. 테두리는 같이 두른다 — 패널
+        # 안에서 이 블록만 테두리가 없으면 딸려 온 글로 보인다.
         st.markdown(
-            '<div class="aux">'
+            '<div class="panel"><div class="aux">'
             '<span class="tag">참고</span>'
             f'총 대기 개선율 <b>{rate:+.2f}%</b>{spread}'
             f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span>'
             + note_html(TOTAL_WAIT_NOTE)
-            + '</div>', unsafe_allow_html=True)
+            + '</div></div>', unsafe_allow_html=True)
         return
 
     ratio = row.get("sim_obs_ratio")
@@ -1746,24 +1772,34 @@ def sim_total_wait(row) -> None:
     # 제 줄에 서므로 앞의 가운뎃점을 뗀다 — `spread` 는 개선율 한 줄로
     # 돌아갈 때(실측 없음) 값 뒤에 이어 붙는 형태라 그쪽은 점이 필요하다.
     meta = "" if sd is None or pd.isna(sd) else f'시드 간 σ {sd:.2f}%p'
+    # **패널은 한 번의 markdown 으로 낸다**(명세 8절). 여는 태그만 따로 부르면
+    # Streamlit 이 그 호출을 독립 요소로 감싸 빈 사각형을 만든다. 여기 들어가는
+    # 것이 전부 문자열이라(σ 물음표도 위젯이 아니라 `title` 속성이다) 한 덩이로
+    # 묶을 수 있다 — 위젯이 끼면 테두리를 두르지 못한다.
     st.markdown(
+        '<div class="panel">'
         '<div class="wcmp">'
         # 픽업 — 판정 지표. 먼저 온다.
         '<span class="wlab">픽업</span>'
         f'<span class="wval">{row["before"]:.2f} → {row["after"]:.2f}분</span>'
         f'<span class="wrate">({row["rate_pct"]:+.2f}%)</span>'
-        # 총 대기 — 참고. 꼬리표는 **값 앞**이다. 값을 읽고 나서 성격을 만나면
-        # 늦다(명세 「참고」 절). 라벨 칸 안에 두어 칸을 늘리지 않는다.
-        '<span class="wlab"><span class="tag">참고</span>총 대기</span>'
+        '<span></span>'
+        # 총 대기 — 참고. 꼬리표는 **줄 끝**이다. 값 앞에 두면(명세의 원래 규칙)
+        # 라벨 칸이 배지만큼 넓어져 픽업 줄의 화살표가 밀린다 — 두 줄이 같은 칸에
+        # 서는 것이 이 블록의 요점이라 여기서는 정렬이 이긴다. 제 칸을 주어
+        # 배지가 값을 밀지 않게 했다.
+        '<span class="wlab">총 대기</span>'
         f'<span class="wval">{bt:.2f} → {at:.2f}분</span>'
         f'<span class="wrate">({rate:+.2f}%)</span>'
+        '<span class="tag">참고</span>'
         f'<span class="wmeta">{meta}'
         f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span></span>'
         # 실측 대비 — 위 두 줄의 근거.
         f'<span class="wfoot">└ 같은 범위 실측 <b>{obs:.1f}분</b>{ratio_txt}'
         ' 매칭을 재현하지 않아 짧다(A-19)</span>'
         '</div>'
-        + note_html(TOTAL_WAIT_NOTE), unsafe_allow_html=True)
+        + note_html(TOTAL_WAIT_NOTE)
+        + '</div>', unsafe_allow_html=True)
 
 
 def sim_dong_panel(cand_id: int, row) -> None:
@@ -1855,11 +1891,15 @@ def render_sim_page() -> None:
     # 다음이 됐다 — 전제는 카드에도 블록에도 걸리므로 둘보다 위에 온다.
     sim_scenario(row)
 
-    # 지도 4 : 패널 1 이었다. 대비 블록이 패널로 오면서 **3 : 1** 로 넓혔다 —
-    # 값 줄이 "18.67 → 16.62분 (−10.99%)" 라 1/5 폭(≈200px)에서는 꺾이고,
-    # 꺾이면 두 줄의 세로 정렬이 무너져 블록의 목적 자체가 사라진다.
-    # 지도는 단계구분도라 폭이 조금 줄어도 읽는 데 지장이 없다.
-    left, right = st.columns([3, 1], gap="medium")
+    # 지도 : 패널 = 4:1 → 3:1 → **2:1**. 대비 블록이 패널로 오면서 한 번,
+    # 블록 글자를 「담당 동」 크기로 올리면서 또 한 번 넓혔다.
+    #
+    # **글자를 키우면 폭이 따라와야 한다.** 값 줄이 "18.67 → 16.62분 (−10.99%)
+    # [참고]" 인데 값을 .95rem 으로 올리면 약 300px 이 든다. 3:1 은 패널 안쪽이
+    # 약 264px 이라 배지가 아래로 접혔고, 접히면 그 줄만 높아져 두 줄의 정렬이
+    # 깨진다 — 정렬이 이 블록의 전부다. 2:1 이면 안쪽이 약 363px 로 여유가 있다.
+    # 지도는 단계구분도라 폭이 줄어도 읽는 데 지장이 없다.
+    left, right = st.columns([2, 1], gap="medium")
 
     with left:
         sc = placement_scope().get(int(row["cand_id"]), {})
