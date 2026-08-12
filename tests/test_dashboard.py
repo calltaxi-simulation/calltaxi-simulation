@@ -445,18 +445,47 @@ def test_no_top_n_wording_on_screen():
 # 총 대기 참고 행 (08.12)
 # ─────────────────────────────────────────────────────────────
 
-def test_total_wait_row_shows_percent_only():
-    """총 대기는 **개선율(%)로만** 낸다 — 분 단위를 화면에 두지 않는다.
+def test_total_wait_minutes_never_appear_without_the_observed_value():
+    """분을 내되 **실측을 반드시 같은 자리에** 낸다 (08.12 개정).
 
-    시뮬 총 대기 before 가 실측의 0.33~0.44배(매칭 미재현 · A-19)라, 분으로
-    보이면 실무자가 진단 화면의 실측 대기와 견주게 되는데 그 비교는 성립하지
-    않는다. 원값(분)은 `placement_eval.csv` 에만 둔다.
+    예전 규칙은 "분을 아예 내지 않는다"였다. 분이 진단 화면의 실측 대기와
+    견줘진다는 이유였는데, **그 대비가 지금 이 블록의 목적이다** — 시뮬 총 대기
+    before 가 실측의 0.30~0.49배라는 것이 매칭 미재현(A-19)의 증거이고 그것이
+    채점을 픽업으로 옮긴 근거다.
+
+    규칙을 없앤 것이 아니라 **짝을 채우는 조건으로 바꿨다.** 분만 내고 실측을
+    빼면 옛 걱정이 그대로 살아나므로, 둘은 같이 움직여야 한다.
     """
-    import re
     shown = "".join(_shown_strings("sim_total_wait"))
-    assert "총 대기 개선율" in shown
-    assert not re.search(r"\d+\.\d+분|:\.\d+f\}분", shown), \
-        f"총 대기 행에 분 단위가 있다: {shown[:80]}"
+    assert "총 대기" in shown
+    assert "분" in shown, "분 단위가 사라졌다 — 개정 취지가 빠졌다"
+    # 실측·배수·근거가 같은 함수 안에 있어야 한다.
+    assert "실측" in shown, "분만 내고 실측을 내지 않는다"
+    assert "A-19" in shown or "A-19" in D.TOTAL_WAIT_NOTE
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
+    assert "obs_total_min" in body, "실측 열을 읽지 않는다"
+
+
+def test_total_wait_falls_back_to_percent_when_observed_is_missing(monkeypatch):
+    """실측이 없으면 분을 내지 않고 개선율 한 줄로 돌아간다.
+
+    분만 있고 실측이 없는 화면은 옛 규칙이 막으려던 바로 그 상태다 — 값이
+    서울 평균 42.7분과 곧장 견줘진다. 옛 `placement_grades.csv` 로도 3페이지가
+    떠야 하므로 죽지 않고 **줄어드는** 쪽으로 처리한다.
+    """
+    import pandas as pd
+    shown = []
+    monkeypatch.setattr(D.st, "markdown", lambda *a, **k: shown.append(a[0]))
+    D.sim_total_wait(pd.Series({
+        "rate_total_pct": -10.99, "rate_total_sd": 0.5,
+        "before": 13.24, "after": 12.14, "rate_pct": -8.57,
+        "before_total": 18.67, "after_total": 16.62,
+        "obs_total_min": float("nan"), "sim_obs_ratio": float("nan")}))
+    body = "".join(shown)
+    assert "총 대기 개선율" in body, "개선율 한 줄로 돌아가지 않았다"
+    assert "18.67" not in body and "16.62" not in body, \
+        "실측이 없는데 분을 냈다"
 
 
 def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():

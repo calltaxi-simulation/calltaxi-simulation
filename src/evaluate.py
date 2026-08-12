@@ -188,6 +188,56 @@ def scope_pickup(log: pd.DataFrame, members: set) -> tuple[float, int]:
     return float(d.loc[hit, "_p"].mean()), int(hit.sum())
 
 
+def observed_dong_wait(calls: pd.DataFrame) -> dict:
+    """동별 **실측** 총 대기 평균과 건수 — 대표 기간 기준.
+
+    **연간 `dong_metrics.csv` 를 쓰면 안 된다.** 그 파일은 2025년 연간이고 시뮬은
+    대표 기간을 재생하므로 기간이 어긋난다. 어긋남이 후보마다 다르다 — 411·240 은
+    연간으로 계산해도 0.2분 차이지만 598 은 43.9 vs 46.4 로 2.5분 벌어진다.
+    같은 기간으로 재야 「시뮬이 실측의 몇 배」가 성립한다.
+
+    `calls` 는 `simulator.slice_period` 로 자른 대표 기간 콜이다. 반환은
+    (gu, dong_canon) → (평균 분, 건수).
+    """
+    d = calls.dropna(subset=["wait_min"])
+    g = (d.groupby([d["origin_gu"].astype(str),
+                    d["origin_dong_canon"].astype(str)])["wait_min"]
+          .agg(["mean", "size"]))
+    return {k: (float(m), int(n)) for k, (m, n) in
+            zip(g.index, zip(g["mean"], g["size"]))}
+
+
+def scope_observed_total(obs: dict, members: set) -> float:
+    """범위 안 **실측** 총 대기 평균. 콜 가중 — `scope_wait_total` 과 같은 자다.
+
+    시뮬 값과 나란히 놓으려는 것이므로 가중도 같아야 한다. 동 균등으로 재면
+    콜 50건짜리 동이 5,000건짜리와 같은 무게가 되어 대비가 어긋난다.
+    """
+    num = den = 0.0
+    for k in members:
+        hit = obs.get(k)
+        if hit is None:
+            continue
+        m, n = hit
+        num += m * n
+        den += n
+    return num / den if den else float("nan")
+
+
+def observed_scope_table(cands: pd.DataFrame, dong_xy: pd.DataFrame,
+                         calls: pd.DataFrame) -> pd.DataFrame:
+    """후보별 실측 총 대기(대표 기간 · 3km). 244곳 0.1초 — 재생이 필요 없다.
+
+    시뮬과 무관한 값이라(실측 로그만 본다) **집계 단계에서 붙인다.** 열 하나
+    때문에 244곳 × 시드 3회를 다시 돌릴 이유가 없다.
+    """
+    obs = observed_dong_wait(calls)
+    rows = [(int(r.cand_id),
+             scope_observed_total(obs, scope_members(r.lat, r.lon, dong_xy)))
+            for r in cands.itertuples()]
+    return pd.DataFrame(rows, columns=["cand_id", "obs_total_min"])
+
+
 def scope_wait_total(log: pd.DataFrame, members: set) -> tuple[float, int]:
     """범위 안 콜의 **총 대기**(접수 → 승차) 평균과 승차 건수. 콜 가중이다.
 
@@ -369,17 +419,23 @@ def seeds_missing(results: pd.DataFrame, target_ids, seeds) -> list:
 # 왼쪽부터 읽으면 "얼마나 좋은가 / 얼마나 확실한가 / 몇 명에게 닿는가"가 차례로
 # 나오게 했다. 등급 3열은 맨 끝 참고 열이다.
 #
-# **총 대기는 개선율 2열만 싣는다**(`rate_total_pct`·`rate_total_sd`). 분 단위
-# before/after 는 시드별 원값(`placement_eval.csv`)에만 두었다 — 집계표에 실으면
-# 그 값이 실측과 견줘지는데, 시뮬 총 대기는 매칭 미재현(A-19)으로 실측의
-# 0.33~0.44배라 그렇게 읽으면 안 된다. **순위 열도 만들지 않는다** — 정렬·판정
-# 기준은 픽업 그대로다.
+# **총 대기는 분 단위도 싣는다**(08.12 개정). 예전에는 개선율 2열만 두고 분을
+# 뺐다 — 실측과 견줘질까 봐서였다. 그런데 그 대비가 바로 **픽업으로 재는 이유**다:
+# 시뮬 총 대기 before 가 실측의 0.33~0.44배라는 사실이 매칭 미재현(A-19)의 증거고
+# 그것이 채점 지표를 픽업으로 옮긴 근거다. 숨기면 근거가 화면에서 사라진다.
+#
+# **그래서 `obs_total_min` 을 짝으로 붙인다.** 분을 낼 때 실측을 함께 내지 않으면
+# 옛 걱정(진단 화면 42.7분과의 무근거 비교)이 그대로 살아난다. 두 열은 같이
+# 움직인다 — 하나만 싣지 말 것.
+#
+# **순위 열은 여전히 만들지 않는다** — 정렬·판정 기준은 픽업 그대로다.
 _GRADE_COLUMNS = [
     "cand_id", "cand_name", "gu", "dongs", "n_seed", "n_dong_scope",
     "n_calls_scope", "before", "delta", "rate_pct", "rate_sd",
     "rate_lo", "rate_hi", "interval", "sample_ok", "total_delta_min",
     "n_overlap", "rank_rate", "rank_total",
     "rate_total_pct", "rate_total_sd",
+    "before_total", "after_total", "obs_total_min", "sim_obs_ratio",
     "grade", "gap_prev", "threshold_prev",
 ]
 
@@ -399,7 +455,8 @@ def report_frame(graded: pd.DataFrame) -> pd.DataFrame:
 
 
 def assign_grades(results: pd.DataFrame, *, stage: int = 2,
-                  k: float = GRADE_SIGMA_K) -> pd.DataFrame:
+                  k: float = GRADE_SIGMA_K,
+                  obs_wait: pd.DataFrame = None) -> pd.DataFrame:
     """후보별 집계표. 개선율 순 정렬 + 대비 구간 + 수혜 규모 + 겹침 수.
 
     **등급도 함께 계산하지만 표시하지 않는다.** 규칙은 아래 그대로 남아 있고
@@ -475,7 +532,11 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
                 rate_pct=("rate_pct", "mean"), rate_sd=("rate_pct", "std"),
                 # 참고 열 — 시드 평균과 시드 간 σ. 픽업과 같은 방식으로 낸다.
                 rate_total_pct=("rate_total_pct", "mean"),
-                rate_total_sd=("rate_total_pct", "std")))
+                rate_total_sd=("rate_total_pct", "std"),
+                # 분 단위 before/after 도 시드 평균으로 낸다. 실측 대비를
+                # 화면에서 보이려면 개선율만으로는 안 된다(_GRADE_COLUMNS 주석).
+                before_total=("before_total", "mean"),
+                after_total=("after_total", "mean")))
     if (g["n_seed"] < 2).any():
         raise ValueError("등급을 매기려면 후보마다 시드 2회 이상이 필요하다 "
                          "— σ 를 낼 수 없다")
@@ -524,6 +585,16 @@ def assign_grades(results: pd.DataFrame, *, stage: int = 2,
 
     g["rank_rate"] = g["rate_pct"].rank(method="min").astype(int)
     g["rank_total"] = g["total_delta_min"].rank(method="min").astype(int)
+
+    # **실측 총 대기와 배수.** 시뮬 분을 낼 때 반드시 따라가는 짝이다 — 이것이
+    # 없으면 화면의 분이 진단 화면 실측(서울 평균 42.7분)과 곧장 견줘진다.
+    # 배수는 「시뮬 ÷ 실측」이라 1보다 한참 작아야 정상이다(0.33~0.44).
+    if obs_wait is None:
+        g["obs_total_min"] = np.nan
+    else:
+        g = g.merge(obs_wait[["cand_id", "obs_total_min"]], on="cand_id",
+                    how="left")
+    g["sim_obs_ratio"] = g["before_total"] / g["obs_total_min"]
     return g[_GRADE_COLUMNS]
 
 
@@ -711,7 +782,12 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.grade:
-        graded = assign_grades(load_results())
+        # 실측 총 대기는 재생과 무관하다 — 콜 로그만 읽으면 된다(0.3초). 집계만
+        # 다시 낼 때도 붙여야 화면이 분을 낼 수 있다.
+        sub = S.slice_period(load.load_calls(), start=S.REPRESENTATIVE_START,
+                             days=S.REPRESENTATIVE_DAYS)
+        obs = observed_scope_table(candidate_table(), dong_coords(), sub)
+        graded = assign_grades(load_results(), obs_wait=obs)
         report_frame(graded).to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
         print(f"[집계] 후보 {len(graded)}곳\n")
         print(candidate_report(graded))
@@ -764,7 +840,8 @@ def main(argv=None):
             print(f"저장: {RESULT_PATH}")
             return
 
-        graded = assign_grades(results)
+        graded = assign_grades(results,
+                               obs_wait=observed_scope_table(cands, dong_xy, sub))
         report_frame(graded).to_csv(GRADE_PATH, index=False, encoding="utf-8-sig")
         print(f"\n[집계] 후보 {len(graded)}곳\n")
         print(candidate_report(graded))
