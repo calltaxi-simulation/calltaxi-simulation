@@ -1077,21 +1077,41 @@ CSS = f"""
 
   /* 픽업 · 총 대기 대비 — 두 줄을 같은 격자에 세운다. 화살표와 괄호가 세로로
      맞아야 "같은 것을 두 자로 잰 값"으로 읽힌다. 줄이 어긋나면 별개 지표 두 개로
-     보이고, 그러면 이 블록의 목적(왜 픽업으로 재는가)이 전달되지 않는다. */
+     보이고, 그러면 이 블록의 목적(왜 픽업으로 재는가)이 전달되지 않는다.
+
+     **우측 패널(좁은 폭)에 선다**(08.12). 값 칸을 3개로 줄이고 σ·실측 줄은
+     격자 전체를 쓰게 해서, 폭이 모자라면 **아래로** 흐르되 두 값 줄은 끝까지
+     같은 칸에 서게 했다. 세 칸은 `nowrap` 이라 값 중간에서 꺾이지 않는다 —
+     "18.67 → 16.62분" 이 반으로 갈리면 정렬이 무너진다.
+
+     정렬이 버티는 근거는 `tabular-nums` 다. 두 줄 모두 `NN.NN → NN.NN분` 로
+     자릿수가 같아 폭이 같아진다. 개선율은 자릿수가 달라(−8.57 / −10.99) 별도
+     칸으로 뽑아야 왼쪽 끝이 맞는다. */
   .wcmp {{ font-size: .78rem; line-height: 1.6; color: #55524C;
-           margin: .35rem 0 .1rem; display: grid;
-           grid-template-columns: auto auto auto auto 1fr;
-           gap: .05rem .5rem; align-items: baseline; }}
-  .wcmp .wlab {{ color: #8A867D; }}
-  .wcmp .wval {{ color: {INK}; font-weight: 620;
+           margin: .1rem 0 .2rem; display: grid;
+           grid-template-columns: auto auto auto;
+           gap: .1rem .45rem; align-items: baseline;
+           justify-content: start; }}
+  .wcmp .wlab {{ color: #8A867D; white-space: nowrap; }}
+  .wcmp .wval {{ color: {INK}; font-weight: 620; white-space: nowrap;
                  font-variant-numeric: tabular-nums; }}
-  .wcmp .wrate {{ font-variant-numeric: tabular-nums; }}
+  .wcmp .wrate {{ font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  /* σ·물음표 — 값 줄에 붙이면 좁은 폭에서 값을 밀어낸다. 아래로 내린다. */
+  .wcmp .wmeta {{ grid-column: 1 / -1; color: #949087; font-size: .72rem;
+                  font-variant-numeric: tabular-nums; }}
   /* 실측 대비 줄 — 격자 전체를 쓰고 한 칸 들여쓴다. 위 두 줄의 근거이지
-     별개 항목이 아니라는 것을 들여쓰기로 말한다. */
+     별개 항목이 아니라는 것을 들여쓰기로 말한다. 좁은 폭에서는 접히므로
+     들여쓴 만큼 매달아(hanging indent) 이어지는 줄도 왼쪽이 맞게 둔다. */
   .wcmp .wfoot {{ grid-column: 1 / -1; color: #8A867D; font-size: .73rem;
-                  padding-left: .2rem; }}
+                  padding-left: .85rem; text-indent: -.85rem; }}
   .wcmp .wfoot b {{ color: #55524C; font-weight: 620;
                     font-variant-numeric: tabular-nums; }}
+  /* 창이 좁으면 패널도 좁아진다. 값 칸이 `nowrap` 이라 자리가 모자라면 넘치므로,
+     **줄을 깨는 대신 글자를 줄인다** — 두 줄이 같은 칸에 서는 것이 이 블록의
+     전부라 그것만은 어느 폭에서도 지킨다. 1200px 에서 약 259 → 230px. */
+  @media (max-width: 1200px) {{
+    .wcmp {{ font-size: .72rem; column-gap: .3rem; }}
+  }}
 
   /* 물음표 — st.metric 의 `help` 아이콘과 같은 성격이다. 별도 요소를 만들지
      않으려고 `title` 툴팁을 쓴다(전제 블록을 한 번의 markdown 으로 내야 한다). */
@@ -1664,7 +1684,14 @@ def sim_scenario(row) -> None:
 
 
 def sim_total_wait(row) -> None:
-    """총 대기 개선율 — **참고.** 픽업 개선율 카드 바로 아래 한 줄.
+    """픽업 · 총 대기 대비 — **참고.** 우측 패널 맨 위, 지도 옆에 선다.
+
+    **본문에서 패널로 옮겼다**(08.12). 카드 아래 본문에 있을 때는 전체 폭을
+    썼지만, 지도가 그 아래로 밀려 결과와 지도를 한눈에 못 봤다. 패널로 오면서
+    지도와 나란히 서고 본문은 카드 → 전제 → 지도로 짧아졌다.
+
+    좁은 폭에서 두 줄의 세로 정렬이 무너지면 별개 지표 두 개로 읽혀 대비가
+    죽는다. 그래서 값 칸을 셋으로 줄이고 σ·실측 줄을 아래로 내렸다(CSS `.wcmp`).
 
     **왜 카드가 아닌가.** `st.metric` 을 한 장 더 두면 판정 지표 셋과 같은 무게로
     읽히는데, 이 값은 순위 기준이 아니다 — 목록 정렬도 분포도 픽업 그대로다.
@@ -1716,19 +1743,21 @@ def sim_total_wait(row) -> None:
     ratio = row.get("sim_obs_ratio")
     ratio_txt = ("." if ratio is None or pd.isna(ratio)
                  else f' — 시뮬은 그 <b>{ratio:.2f}배</b>다.')
+    # 제 줄에 서므로 앞의 가운뎃점을 뗀다 — `spread` 는 개선율 한 줄로
+    # 돌아갈 때(실측 없음) 값 뒤에 이어 붙는 형태라 그쪽은 점이 필요하다.
+    meta = "" if sd is None or pd.isna(sd) else f'시드 간 σ {sd:.2f}%p'
     st.markdown(
         '<div class="wcmp">'
         # 픽업 — 판정 지표. 먼저 온다.
         '<span class="wlab">픽업</span>'
         f'<span class="wval">{row["before"]:.2f} → {row["after"]:.2f}분</span>'
         f'<span class="wrate">({row["rate_pct"]:+.2f}%)</span>'
-        '<span></span><span></span>'
-        # 총 대기 — 참고. 꼬리표를 값 뒤에 두어 성격을 못 박는다.
-        '<span class="wlab">총 대기</span>'
+        # 총 대기 — 참고. 꼬리표는 **값 앞**이다. 값을 읽고 나서 성격을 만나면
+        # 늦다(명세 「참고」 절). 라벨 칸 안에 두어 칸을 늘리지 않는다.
+        '<span class="wlab"><span class="tag">참고</span>총 대기</span>'
         f'<span class="wval">{bt:.2f} → {at:.2f}분</span>'
         f'<span class="wrate">({rate:+.2f}%)</span>'
-        '<span class="tag">참고</span>'
-        f'<span class="dim">{spread}'
+        f'<span class="wmeta">{meta}'
         f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span></span>'
         # 실측 대비 — 위 두 줄의 근거.
         f'<span class="wfoot">└ 같은 범위 실측 <b>{obs:.1f}분</b>{ratio_txt}'
@@ -1821,16 +1850,16 @@ def render_sim_page() -> None:
     m3.metric("총 절감", f"{row['total_delta_min']:,.0f}분",
               help="3km 안에서 줄어든 대기 시간을 전부 더한 값. 한 달 기준입니다.")
 
-    # 참고 지표는 판정 지표 **아래** 한 줄이다. 카드로 만들지 않는 이유는
-    # `sim_total_wait` 주석 참조 — 순위 기준은 픽업 그대로다.
-    # 픽업 before/after 도 여기서 나온다(위 카드에서 뺐다).
-    sim_total_wait(row)
-
     # **전제는 결과 바로 뒤, 지도보다 앞이다.** 아래 경고들과 같은 층에 두면 늦다.
-    # 참고 행보다도 뒤인 것은, 전제("10대 증차")가 그 행에도 걸리기 때문이다.
+    # 대비 블록(`sim_total_wait`)이 우측 패널로 가면서 이 자리가 카드 바로
+    # 다음이 됐다 — 전제는 카드에도 블록에도 걸리므로 둘보다 위에 온다.
     sim_scenario(row)
 
-    left, right = st.columns([4, 1], gap="medium")
+    # 지도 4 : 패널 1 이었다. 대비 블록이 패널로 오면서 **3 : 1** 로 넓혔다 —
+    # 값 줄이 "18.67 → 16.62분 (−10.99%)" 라 1/5 폭(≈200px)에서는 꺾이고,
+    # 꺾이면 두 줄의 세로 정렬이 무너져 블록의 목적 자체가 사라진다.
+    # 지도는 단계구분도라 폭이 조금 줄어도 읽는 데 지장이 없다.
+    left, right = st.columns([3, 1], gap="medium")
 
     with left:
         sc = placement_scope().get(int(row["cand_id"]), {})
@@ -1853,6 +1882,11 @@ def render_sim_page() -> None:
             ss.page = 2 if ss.selected else 1
             st.rerun()
 
+        # 패널 순서: 대비 블록 → 담당 동 → 경고(있을 때만).
+        # **블록이 맨 위인 이유** — 지도와 나란히 서는 값이라 지도를 보며
+        # 눈을 옮기는 거리가 짧아야 한다. 담당 동은 지도의 범례에 가깝고,
+        # 경고는 있을 때만 뜨므로 맨 아래여야 순서가 흔들리지 않는다.
+        sim_total_wait(row)
         sim_dong_panel(int(row["cand_id"]), row)
         sim_warnings(row)
 

@@ -541,6 +541,40 @@ def test_before_after_is_not_shown_twice():
         assert label in shown, f"판정 카드 「{label}」 이 사라졌다"
 
 
+def test_comparison_block_sits_in_the_right_panel():
+    """대비 블록은 **우측 패널**에서 지도 옆에 선다 (08.12).
+
+    본문에 두면 전체 폭을 쓰면서 지도를 아래로 밀어 결과와 지도를 한눈에 볼 수
+    없다. 패널 순서는 대비 블록 → 담당 동 → 경고다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
+    head, panel = body.split("with right:", 1)
+    assert "sim_total_wait(row)" not in head, "대비 블록이 아직 본문에 있다"
+    for fn in ("sim_total_wait", "sim_dong_panel", "sim_warnings"):
+        assert f"{fn}(" in panel, f"{fn} 이 우측 패널에 없다"
+    order = [panel.index(f"{fn}(") for fn in
+             ("sim_total_wait", "sim_dong_panel", "sim_warnings")]
+    assert order == sorted(order), "패널 순서가 블록 → 담당 동 → 경고 가 아니다"
+
+
+def test_comparison_block_keeps_its_columns_when_narrow():
+    """좁은 폭에서도 두 값 줄이 같은 격자에 선다 — 정렬이 이 블록의 전부다.
+
+    값 칸은 줄바꿈을 막고(`nowrap`), 자리가 모자라면 줄을 깨는 대신 글자를
+    줄인다. σ·실측 줄만 격자 전체를 써서 아래로 흐른다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    css = src.split(".wcmp", 1)[1].split("/* 물음표", 1)[0]
+    assert "white-space: nowrap" in css, "값 칸이 꺾일 수 있다"
+    assert "tabular-nums" in css, "자릿수 폭이 고정되지 않는다"
+    assert "grid-column: 1 / -1" in css, "σ·실측 줄이 격자 전체를 쓰지 않는다"
+    assert "@media" in css and "font-size" in css, "좁은 폭 대비가 없다"
+    # 지도와 패널 비율 — 1/5 로 돌아가면 값 줄이 꺾인다
+    body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
+    assert "st.columns([3, 1]" in body, "패널이 좁아져 정렬이 무너진다"
+
+
 def test_total_wait_row_is_silent_without_data(monkeypatch):
     """열이 없거나 비어 있으면 아무것도 그리지 않는다.
 
