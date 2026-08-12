@@ -1089,23 +1089,23 @@ CSS = f"""
      정렬이 버티는 근거는 `tabular-nums` 다. 두 줄 모두 `NN.NN → NN.NN분` 로
      자릿수가 같아 폭이 같아진다. 개선율은 자릿수가 달라(−8.57 / −10.99) 별도
      칸으로 뽑아야 왼쪽 끝이 맞는다. */
-  /* 글자 크기는 「담당 동」 블록에 맞춘다 — 같은 패널 층이라 여기만 작으면
-     주석처럼 읽힌다. 라벨은 `.mlabel`(.78), 값은 `.mvalue`(.95) 와 같은 값이다.
-     값이 라벨보다 큰 것이 위계다. 개선율은 값과 같은 크기로 두되 굵기를 낮춰
-     before→after 가 먼저 눈에 들게 했다. */
-  .wcmp {{ font-size: .78rem; line-height: 1.55; color: #55524C;
-           margin: 0 0 .1rem; display: grid;
-           grid-template-columns: auto auto auto auto;
-           gap: .12rem .4rem; align-items: baseline;
+  /* 이 블록이 우측 패널의 머리다 — 「담당 동」의 동 이름·콜 수(`.mvalue` .95rem)
+     보다 작으면 딸려 온 글로 읽힌다. 그래서 **라벨을 그 크기(.95rem)에 맞추고
+     값은 한 단계 위(1.1rem)** 로 올린다. 값이 라벨보다 큰 것이 위계다.
+     개선율은 값과 같은 크기로 두되 굵기를 낮춰 before→after 가 먼저 눈에 들게
+     했다. 아래 두 줄(실측 대비 · 인용 경고)은 근거라 본문 크기 그대로다.
+
+     칸은 셋이다. 「참고」 배지를 떼면서 넷째 칸이 사라졌고, 그만큼 값 칸에
+     자리가 돌아와 글자를 키울 수 있었다. */
+  .wcmp {{ font-size: .95rem; line-height: 1.5; color: #55524C;
+           margin: 0 0 .15rem; display: grid;
+           grid-template-columns: auto auto auto;
+           gap: .1rem .45rem; align-items: baseline;
            justify-content: start; }}
-  /* 「참고」 는 넷째 칸 — 줄 끝이다. 값 앞(라벨 칸)에 두면 라벨이 배지만큼
-     넓어져 픽업 줄의 화살표가 밀린다. 제 칸을 주면 값 칸이 흔들리지 않는다.
-     **배지 안에서 줄이 접히면 안 된다** — 접히면 그 줄만 높아져 정렬이 깨진다. */
-  .wcmp .tag {{ margin-right: 0; margin-left: .05rem; white-space: nowrap; }}
   .wcmp .wlab {{ color: #6E6A62; white-space: nowrap; }}
-  .wcmp .wval {{ color: {INK}; font-weight: 620; white-space: nowrap;
-                 font-size: .95rem; font-variant-numeric: tabular-nums; }}
-  .wcmp .wrate {{ font-size: .95rem; font-weight: 500; white-space: nowrap;
+  .wcmp .wval {{ color: {INK}; font-weight: 640; white-space: nowrap;
+                 font-size: 1.1rem; font-variant-numeric: tabular-nums; }}
+  .wcmp .wrate {{ font-size: 1.1rem; font-weight: 500; white-space: nowrap;
                   font-variant-numeric: tabular-nums; }}
   /* σ·물음표 — 값 줄에 붙이면 좁은 폭에서 값을 밀어낸다. 아래로 내린다. */
   .wcmp .wmeta {{ grid-column: 1 / -1; color: #949087; font-size: .74rem;
@@ -1118,14 +1118,14 @@ CSS = f"""
                   padding-left: .85rem; text-indent: -.85rem; }}
   .wcmp .wfoot b {{ color: #55524C; font-weight: 620;
                     font-variant-numeric: tabular-nums; }}
-  /* 창이 좁으면 패널도 좁아진다. 값 칸이 `nowrap` 이라 자리가 모자라면 배지가
-     아래로 접히는데, 접히면 그 줄만 높아져 두 줄의 정렬이 깨진다.
+  /* 창이 좁으면 패널도 좁아진다. 값 칸이 `nowrap` 이라 자리가 모자라면 넘치므로
      **줄을 깨는 대신 글자를 줄인다** — 두 줄이 같은 칸에 서는 것이 이 블록의
-     전부라 그것만은 어느 폭에서도 지킨다. */
+     전부라 그것만은 어느 폭에서도 지킨다. 위계(값 > 라벨)는 줄어든 뒤에도
+     유지한다. */
   @media (max-width: 1150px) {{
-    .wcmp {{ column-gap: .3rem; }}
-    .wcmp .wval, .wcmp .wrate {{ font-size: .84rem; }}
-    .wcmp .wlab, .wcmp .wfoot {{ font-size: .73rem; }}
+    .wcmp {{ font-size: .85rem; column-gap: .32rem; }}
+    .wcmp .wval, .wcmp .wrate {{ font-size: .98rem; }}
+    .wcmp .wfoot {{ font-size: .74rem; }}
   }}
 
   /* 물음표 — st.metric 의 `help` 아이콘과 같은 성격이다. 별도 요소를 만들지
@@ -1712,10 +1712,10 @@ def sim_total_wait(row) -> None:
     안에서 딸려 온 글로 보이지 않는다. 안에 위젯이 없어(σ 물음표도 `title`
     속성이다) **한 번의 markdown 으로** 낼 수 있다(명세 8절).
 
-    **「참고」 꼬리표만 값 뒤다.** 명세의 일반 규칙은 값 앞인데(값을 읽고 나서
-    성격을 만나면 늦다), 여기서는 배지가 라벨 칸을 넓혀 픽업 줄의 화살표를
-    민다. 두 줄이 같은 칸에 서는 것이 이 블록의 전부라 정렬이 이긴다.
-    개선율 한 줄로 돌아가는 쪽은 정렬 문제가 없으므로 값 앞 그대로다.
+    **「참고」 배지는 뗐다**(08.12). 이 블록이 순위 기준이 아니라는 것은 이제
+    아래 두 줄(실측 대비 · 인용 경고)과 물음표가 말한다 — 목록 정렬·분포·등급이
+    픽업 그대로인 것은 코드에서 그대로다. 배지가 빠지면서 넷째 칸이 사라져
+    값 칸에 자리가 돌아왔고, 그만큼 글자를 키울 수 있었다.
 
     **왜 카드가 아닌가.** `st.metric` 을 한 장 더 두면 판정 지표 셋과 같은 무게로
     읽히는데, 이 값은 순위 기준이 아니다 — 목록 정렬도 분포도 픽업 그대로다.
@@ -1759,7 +1759,6 @@ def sim_total_wait(row) -> None:
         # 안에서 이 블록만 테두리가 없으면 딸려 온 글로 보인다.
         st.markdown(
             '<div class="panel"><div class="aux">'
-            '<span class="tag">참고</span>'
             f'총 대기 개선율 <b>{rate:+.2f}%</b>{spread}'
             f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span>'
             + note_html(TOTAL_WAIT_NOTE)
@@ -1783,20 +1782,19 @@ def sim_total_wait(row) -> None:
         '<span class="wlab">픽업</span>'
         f'<span class="wval">{row["before"]:.2f} → {row["after"]:.2f}분</span>'
         f'<span class="wrate">({row["rate_pct"]:+.2f}%)</span>'
-        '<span></span>'
-        # 총 대기 — 참고. 꼬리표는 **줄 끝**이다. 값 앞에 두면(명세의 원래 규칙)
-        # 라벨 칸이 배지만큼 넓어져 픽업 줄의 화살표가 밀린다 — 두 줄이 같은 칸에
-        # 서는 것이 이 블록의 요점이라 여기서는 정렬이 이긴다. 제 칸을 주어
-        # 배지가 값을 밀지 않게 했다.
+        # 총 대기 — 라벨은 이것 하나다. 「참고」 배지를 뗐다(08.12). 성격은
+        # 아래 두 줄(실측 대비 · 인용 경고)과 물음표가 말한다. 배지가 빠지면서
+        # 넷째 칸이 사라져 값 칸에 자리가 돌아왔다.
         '<span class="wlab">총 대기</span>'
         f'<span class="wval">{bt:.2f} → {at:.2f}분</span>'
         f'<span class="wrate">({rate:+.2f}%)</span>'
-        '<span class="tag">참고</span>'
         f'<span class="wmeta">{meta}'
         f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span></span>'
-        # 실측 대비 — 위 두 줄의 근거.
+        # 실측 대비 — 위 두 줄의 근거. 가정 번호(A-19)는 뗐다 — 화면은 실무자가
+        # 보는 자리이고, 「매칭을 재현하지 않아 짧다」가 그 자체로 뜻이 통한다.
+        # 번호는 문서와 코드에 남아 있으므로 추적은 끊기지 않는다.
         f'<span class="wfoot">└ 같은 범위 실측 <b>{obs:.1f}분</b>{ratio_txt}'
-        ' 매칭을 재현하지 않아 짧다(A-19)</span>'
+        ' 매칭을 재현하지 않아 짧다</span>'
         '</div>'
         + note_html(TOTAL_WAIT_NOTE)
         + '</div>', unsafe_allow_html=True)

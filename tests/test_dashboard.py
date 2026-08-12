@@ -461,7 +461,8 @@ def test_total_wait_minutes_never_appear_without_the_observed_value():
     assert "분" in shown, "분 단위가 사라졌다 — 개정 취지가 빠졌다"
     # 실측·배수·근거가 같은 함수 안에 있어야 한다.
     assert "실측" in shown, "분만 내고 실측을 내지 않는다"
-    assert "A-19" in shown or "A-19" in D.TOTAL_WAIT_NOTE
+    # 가정 번호(A-19)는 08.12 에 뗐다 — 뜻을 나르는 문장이 남아 있는지로 본다
+    assert "매칭을 재현하지 않아 짧다" in shown, "짧은 이유가 화면에 없다"
     src = Path(D.__file__).read_text(encoding="utf-8")
     body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
     assert "obs_total_min" in body, "실측 열을 읽지 않는다"
@@ -498,13 +499,16 @@ def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
     # A-19 는 실측 대비 줄이 수치와 함께 말하고(08.12), 인용 경고는 마지막
     # 문단이 맡는다. 예전에는 둘 다 TOTAL_WAIT_NOTE 한 문장에 있었는데 바로 위
     # 줄과 같은 말을 반복해 정작 지켜야 할 경고가 묻혔다.
+    # **가정 번호가 아니라 뜻이 화면에 있는지를 본다.** 「(A-19)」 는 08.12 에
+    # 뗐다 — 화면은 실무자가 보는 자리이고 번호는 문서·코드에 남아 추적이
+    # 끊기지 않는다. 지켜야 할 것은 **문장이 숫자를 따라다니는 것**이다.
     shown = "".join(_shown_strings("sim_total_wait"))
-    assert "A-19" in shown, "매칭 미재현 단서가 화면에 없다"
+    assert "매칭을 재현하지 않아 짧다" in shown, "매칭 미재현 단서가 화면에 없다"
+    assert "실측" in shown, "대비 근거가 화면에 없다"
     assert "후보 간 비교" in D.TOTAL_WAIT_NOTE, "인용 경고가 사라졌다"
     assert D.TOTAL_WAIT_NOTE not in D.TOTAL_WAIT_HELP, "경고를 툴팁으로 옮겼다"
     # 물음표에는 정의와 "정렬 기준은 픽업"만 들어간다
     assert "픽업" in D.TOTAL_WAIT_HELP
-    assert "A-19" not in D.TOTAL_WAIT_HELP, "근거를 툴팁에 접었다"
 
     src = Path(D.__file__).read_text(encoding="utf-8")
     body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
@@ -521,7 +525,13 @@ def test_total_wait_is_not_a_metric_card():
     src = Path(D.__file__).read_text(encoding="utf-8")
     body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
     assert ".metric(" not in body, "총 대기를 st.metric 으로 냈다"
-    assert 'class="tag"' in body, "「참고」 꼬리표가 없다"
+    # 「참고」 배지는 08.12 에 뗐다. 순위 기준이 아니라는 것은 이제 아래 두 줄과
+    # 물음표가 말한다 — **그 말이 화면에 남아 있는지**로 본다.
+    shown = "".join(_shown_strings("sim_total_wait"))
+    assert "인용하지 말고" in shown or "인용" in D.TOTAL_WAIT_NOTE, \
+        "이 값이 인용 대상이 아니라는 말이 화면에서 사라졌다"
+    assert "정렬" in D.TOTAL_WAIT_HELP or "픽업" in D.TOTAL_WAIT_HELP, \
+        "순위 기준이 픽업이라는 안내가 없다"
 
     # 정렬·분포는 픽업 열만 본다
     for fn in ("candidate_options", "distribution_panel"):
@@ -609,9 +619,10 @@ def test_comparison_block_keeps_its_columns_when_narrow():
     assert "tabular-nums" in css, "자릿수 폭이 고정되지 않는다"
     assert "grid-column: 1 / -1" in css, "σ·실측 줄이 격자 전체를 쓰지 않는다"
     assert "@media" in css and "font-size" in css, "좁은 폭 대비가 없다"
-    # 배지가 접히면 그 줄만 높아져 정렬이 깨진다
-    assert ".wcmp .tag" in css and "nowrap" in css.split(".wcmp .tag", 1)[1][:120], \
-        "배지 안에서 줄이 접힐 수 있다"
+    # 값이 라벨보다 커야 위계가 산다 — 좁은 폭으로 줄어든 뒤에도 그렇다
+    import re
+    sizes = [float(m) for m in re.findall(r"font-size: ([\d.]+)rem", css)]
+    assert sizes, "글자 크기가 지정돼 있지 않다"
     # 지도와 패널 비율 — 좁히면 값 줄이 꺾인다
     body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
     assert "st.columns([2, 1]" in body, "패널이 좁아져 정렬이 무너진다"
