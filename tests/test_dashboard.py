@@ -505,11 +505,11 @@ def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
     assert 'title="{TOTAL_WAIT_HELP}"' in body or "TOTAL_WAIT_HELP" in body
 
 
-def test_total_wait_is_not_a_fifth_metric_card():
-    """카드로 만들지 않는다 — 판정 지표 넷과 같은 무게로 읽힌다.
+def test_total_wait_is_not_a_metric_card():
+    """카드로 만들지 않는다 — 판정 지표와 같은 무게로 읽힌다.
 
     이 값은 순위 기준이 아니다. 목록 정렬도 분포 패널도 픽업 그대로다
-    (docs/model_flow.md 「총 대기도 함께 재되 참고 열이다」).
+    (docs/evaluation.md 「총 대기도 함께 재되 참고 열이다」).
     """
     src = Path(D.__file__).read_text(encoding="utf-8")
     body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
@@ -520,6 +520,25 @@ def test_total_wait_is_not_a_fifth_metric_card():
     for fn in ("candidate_options", "distribution_panel"):
         fbody = src.split(f"def {fn}", 1)[1].split("\ndef ", 1)[0]
         assert "rate_total" not in fbody, f"{fn} 이 총 대기를 기준으로 쓴다"
+
+
+def test_before_after_is_not_shown_twice():
+    """`before → after` 는 대비 블록에만 둔다 — 카드 넷째를 뺐다 (08.12).
+
+    같은 숫자가 카드와 블록에 두 번 뜨면 블록의 대비 효과가 약해진다.
+    before/after 는 픽업과 총 대기를 나란히 놓을 때 의미가 있는 값이라
+    그쪽이 담당한다. 판정 카드는 셋(개선율 · 대비 구간 · 총절감)이다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
+    assert "st.columns(3)" in body, "판정 카드가 셋이 아니다"
+
+    # **화면에 나가는 문자열만 본다.** 주석은 카드를 왜 뺐는지 적는 자리라 옛
+    # 라벨을 인용할 수밖에 없다 — 본문 검색으로 찾으면 그 인용이 걸린다.
+    shown = "".join(_shown_strings("render_sim_page"))
+    assert "before → after" not in shown, "카드에 before → after 가 남아 있다"
+    for label in ("픽업 개선율", "대비 구간", "총 절감"):
+        assert label in shown, f"판정 카드 「{label}」 이 사라졌다"
 
 
 def test_total_wait_row_is_silent_without_data(monkeypatch):
