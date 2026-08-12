@@ -26,6 +26,31 @@ import pandas as pd
 # 저장소 상위의 data/ — clone 위치가 어디든 이 파일 기준으로 잡힌다.
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
+# 저장소에 함께 두는 **소형 공개 자료**. `data/` 가 없는 팀원(대시보드만 보는
+# 경우)을 위한 폴백이다 — clone 만으로 화면이 뜨게 하려는 것.
+#
+# **콜 원본은 여기 두지 않는다(개인정보).** 여기 들어가는 것은 차고지 좌표·후보
+# 풀처럼 공개된 소형 파일과, 진단 지도용으로 미리 단순화한 경계뿐이다.
+# 재실행(evaluate·metrics)은 여전히 `data/` 의 콜 원본을 필요로 한다.
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
+# 진단 지도 **표시 전용** 경계. 0.0002도(약 22m)로 단순화돼 있어 면적·거리·
+# 점-폴리곤 판정에 쓰면 안 된다 — `candidates.py` 는 면적(geometry.area)과
+# sjoin, EPSG:5179 격자에 경계를 쓰므로 **반드시 원본을 봐야 한다.**
+# 그래서 이 파일은 `load_dong(with_boundary=True)` 가 아니라 대시보드의
+# `load_boundary()` 만 읽는다. 다시 만들려면 `build_display_boundary()`.
+DISPLAY_BOUNDARY = "seoul_dong_display_only.geojson"
+
+
+def data_or_asset(name: str) -> Path:
+    """`data/` 에 있으면 그것, 없으면 저장소 사본(`assets/`).
+
+    **원본이 늘 이긴다** — 데이터가 갱신됐는데 저장소 사본이 낡아 조용히
+    옛 값을 읽는 일을 막는다. 사본은 어디까지나 `data/` 가 없을 때의 폴백이다.
+    """
+    p = DATA_DIR / name
+    return p if p.exists() else ASSETS_DIR / name
+
 # 콜 원본 — 특장차 한정본(1,390,969행). 원본 명세에서 흡수한 사실은
 # docs/calibration.md 첫 절("원본 명세에서 흡수한 사실").
 #
@@ -370,7 +395,7 @@ def load_depots(path: Path = None) -> pd.DataFrame:
     **시뮬은 이 값을 배분 비율로만 쓴다**(`simulator.allocate_fleet`) — 그 날 나온
     가동 대수(평일 574 / 주말 374)를 거점별로 나누는 가중치다.
     """
-    path = Path(path) if path else DATA_DIR / "차고지44_좌표.csv"
+    path = Path(path) if path else data_or_asset("차고지44_좌표.csv")
     df = pd.read_csv(path, encoding="utf-8-sig")
     out = df.rename(columns={
         "연번": "depot_id", "차고지명": "name", "소속구": "gu", "상세주소": "address",
@@ -389,6 +414,12 @@ def load_dong(path: Path = None, *, with_boundary: bool = False, crs: int = 4326
 
     원본 GeoJSON 은 EPSG:4326 이다. 거리 계산을 미터로 하려면 crs=5179 를 넘겨
     투영좌표로 받는다(README 의 EPSG:5179 기준).
+
+    **여기는 언제나 원본을 읽는다 — 표시용 단순화본으로 폴백하지 않는다.**
+    `candidates.py` 가 이 경계로 면적(`geometry.area`)·`sjoin`·EPSG:5179 격자를
+    계산하는데, 22m 단순화본을 쓰면 면적이 틀리고 경계 근처 점 판정이 뒤집힌다.
+    `data/` 가 없으면 **조용히 대체하지 말고 그대로 실패해야 한다.**
+    화면용 경계가 필요한 자리는 `load_display_boundary()` 를 쓴다.
     """
     if not with_boundary:
         cen = build_dong_lookup(path)
@@ -404,6 +435,52 @@ def load_dong(path: Path = None, *, with_boundary: bool = False, crs: int = 4326
     if crs and gdf.crs and gdf.crs.to_epsg() != crs:
         gdf = gdf.to_crs(crs)
     return gdf[["adm_nm", "adm_cd2", "gu", "dong_canon", "geometry"]]
+
+
+# 표시 전용 경계를 만들 때 쓰는 단순화 허용오차(도). 0.0002 ≈ 22m.
+# 대시보드가 런타임에 쓰던 값과 같다 — 그 일을 미리 해 두는 것뿐이다.
+DISPLAY_SIMPLIFY_TOL = 0.0002
+
+
+def build_display_boundary(out: Path = None, tol: float = DISPLAY_SIMPLIFY_TOL):
+    """진단 지도용 경계를 만들어 `assets/` 에 저장한다. **원본이 필요하다.**
+
+    34.8MB 원본을 저장소에 넣지 않으려고 둔 장치다 — 서울만·필요 컬럼만 남기고
+    22m 로 단순화하면 **0.40MB** 가 된다(87배). 대시보드는 어차피 이 정밀도로
+    그리므로 화면에서 달라지는 것이 없다.
+
+    경계 원본이 갱신되면 이 함수를 다시 돌려야 한다. 사본이 낡으면 지도만
+    옛 경계로 그려지고 계산은 원본을 보므로 **둘이 갈릴 수 있다.**
+    """
+    gdf = load_dong(with_boundary=True).copy()          # 원본 — 폴백 없음
+    gdf["geometry"] = gdf.geometry.simplify(tol, preserve_topology=True)
+    out = Path(out) if out else ASSETS_DIR / DISPLAY_BOUNDARY
+    out.parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_file(out, driver="GeoJSON")
+    return out
+
+
+def load_display_boundary():
+    """진단 지도용 경계. **표시 전용 — 면적·거리 계산에 쓰지 말 것.**
+
+    `data/` 에 원본이 있으면 원본을 읽어 단순화하고(원본이 늘 이긴다), 없으면
+    저장소 사본을 그대로 쓴다. 사본은 이미 단순화돼 있어 다시 줄이지 않는다.
+    """
+    import geopandas as gpd
+
+    src = DATA_DIR / "HangJeongDong_ver20230701.geojson"
+    if src.exists():
+        gdf = load_dong(with_boundary=True).copy()
+        gdf["geometry"] = gdf.geometry.simplify(DISPLAY_SIMPLIFY_TOL,
+                                                preserve_topology=True)
+        return gdf
+
+    asset = ASSETS_DIR / DISPLAY_BOUNDARY
+    if not asset.exists():
+        raise FileNotFoundError(
+            f"경계가 없다 — {src} 도 {asset} 도 찾지 못했다. "
+            f"data/ 를 두거나 load.build_display_boundary() 로 사본을 만들 것")
+    return gpd.read_file(asset, engine="pyogrio")
 
 
 _POOL_COLS = {
@@ -456,7 +533,7 @@ def load_candidates(path: Path = None, *, outdoor_only: bool = True) -> pd.DataF
               current_depot, current_depot_dist_m,
               open_hours, price_grade, usage_efficiency
     """
-    path = Path(path) if path else DATA_DIR / "sim_pool_v4.csv"
+    path = Path(path) if path else data_or_asset("sim_pool_v4.csv")
     df = pd.read_csv(path, encoding="utf-8-sig")
 
     missing = set(_POOL_COLS) - set(df.columns)

@@ -35,6 +35,24 @@ outputs/*
 # dong_metrics.parquet 은 위 csv 와 같은 내용의 직렬화 중복이라 뺀다 —
 # 바이너리라 diff 가 안 되고 실행할 때마다 새 blob 이 쌓인다.
 
+# 저장소 동봉 소형 공개 자료 — clone 만으로 대시보드가 뜨게 하는 최소 집합.
+# 위 data/ · *.csv · *.geojson 규칙보다 뒤에 와야 예외가 먹는다.
+#
+# **콜 원본은 절대 여기 넣지 않는다(개인정보).** 대시보드는 콜 원본을 읽지
+# 않으므로(load_calls 를 부르지 않는다) 아래 셋과 outputs/ 만으로 뜬다.
+# 재실행(evaluate·metrics)에는 여전히 data/ 의 콜 원본이 필요하다.
+# 주의: .gitignore 는 **줄 끝 주석을 지원하지 않는다.** 패턴 뒤에 `#` 를 붙이면
+# 주석이 아니라 패턴의 일부가 되어 아무것도 매치하지 않는다. 주석은 윗줄에 둔다.
+!assets/
+# 5KB — 공단 공개 차고지 좌표·배속 정원
+!assets/차고지44_좌표.csv
+# 113KB — 후보 풀(공개 주차장 목록 파생)
+!assets/sim_pool_v4.csv
+# 표시 전용 경계 405KB. 원본 34.8MB 를 서울만·22m 단순화로 줄인 것이라
+# **면적·거리 계산에 쓰면 안 된다** — 그쪽은 load_dong(with_boundary=True) 가
+# 원본을 본다. 다시 만들려면 load.build_display_boundary().
+!assets/seoul_dong_display_only.geojson
+
 *.png
 *.html
 !README*.png           # 문서용 이미지는 허용
