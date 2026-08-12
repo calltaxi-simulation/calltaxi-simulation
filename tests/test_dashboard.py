@@ -445,18 +445,48 @@ def test_no_top_n_wording_on_screen():
 # 총 대기 참고 행 (08.12)
 # ─────────────────────────────────────────────────────────────
 
-def test_total_wait_row_shows_percent_only():
-    """총 대기는 **개선율(%)로만** 낸다 — 분 단위를 화면에 두지 않는다.
+def test_total_wait_minutes_never_appear_without_the_observed_value():
+    """분을 내되 **실측을 반드시 같은 자리에** 낸다 (08.12 개정).
 
-    시뮬 총 대기 before 가 실측의 0.33~0.44배(매칭 미재현 · A-19)라, 분으로
-    보이면 실무자가 진단 화면의 실측 대기와 견주게 되는데 그 비교는 성립하지
-    않는다. 원값(분)은 `placement_eval.csv` 에만 둔다.
+    예전 규칙은 "분을 아예 내지 않는다"였다. 분이 진단 화면의 실측 대기와
+    견줘진다는 이유였는데, **그 대비가 지금 이 블록의 목적이다** — 시뮬 총 대기
+    before 가 실측의 0.30~0.49배라는 것이 매칭 미재현(A-19)의 증거이고 그것이
+    채점을 픽업으로 옮긴 근거다.
+
+    규칙을 없앤 것이 아니라 **짝을 채우는 조건으로 바꿨다.** 분만 내고 실측을
+    빼면 옛 걱정이 그대로 살아나므로, 둘은 같이 움직여야 한다.
     """
-    import re
     shown = "".join(_shown_strings("sim_total_wait"))
-    assert "총 대기 개선율" in shown
-    assert not re.search(r"\d+\.\d+분|:\.\d+f\}분", shown), \
-        f"총 대기 행에 분 단위가 있다: {shown[:80]}"
+    assert "총 대기" in shown
+    assert "분" in shown, "분 단위가 사라졌다 — 개정 취지가 빠졌다"
+    # 실측·배수·근거가 같은 함수 안에 있어야 한다.
+    assert "실측" in shown, "분만 내고 실측을 내지 않는다"
+    # 가정 번호(A-19)는 08.12 에 뗐다 — 뜻을 나르는 문장이 남아 있는지로 본다
+    assert "매칭을 재현하지 않아 짧다" in shown, "짧은 이유가 화면에 없다"
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
+    assert "obs_total_min" in body, "실측 열을 읽지 않는다"
+
+
+def test_total_wait_falls_back_to_percent_when_observed_is_missing(monkeypatch):
+    """실측이 없으면 분을 내지 않고 개선율 한 줄로 돌아간다.
+
+    분만 있고 실측이 없는 화면은 옛 규칙이 막으려던 바로 그 상태다 — 값이
+    서울 평균 42.7분과 곧장 견줘진다. 옛 `placement_grades.csv` 로도 3페이지가
+    떠야 하므로 죽지 않고 **줄어드는** 쪽으로 처리한다.
+    """
+    import pandas as pd
+    shown = []
+    monkeypatch.setattr(D.st, "markdown", lambda *a, **k: shown.append(a[0]))
+    D.sim_total_wait(pd.Series({
+        "rate_total_pct": -10.99, "rate_total_sd": 0.5,
+        "before": 13.24, "after": 12.14, "rate_pct": -8.57,
+        "before_total": 18.67, "after_total": 16.62,
+        "obs_total_min": float("nan"), "sim_obs_ratio": float("nan")}))
+    body = "".join(shown)
+    assert "총 대기 개선율" in body, "개선율 한 줄로 돌아가지 않았다"
+    assert "18.67" not in body and "16.62" not in body, \
+        "실측이 없는데 분을 냈다"
 
 
 def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
@@ -465,8 +495,18 @@ def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
     **툴팁은 부연을 접는 자리이지 근거를 옮겨 놓는 자리가 아니다**(명세 3절).
     숫자를 밖으로 인용할 때 반드시 따라가야 하는 말이라 접으면 안 된다.
     """
-    assert "A-19" in D.TOTAL_WAIT_NOTE and "후보 간 비교" in D.TOTAL_WAIT_NOTE
-    assert D.TOTAL_WAIT_NOTE not in D.TOTAL_WAIT_HELP
+    # **어느 문자열이 나르는지는 묻지 않는다 — 화면에 있는지를 묻는다.**
+    # A-19 는 실측 대비 줄이 수치와 함께 말하고(08.12), 인용 경고는 마지막
+    # 문단이 맡는다. 예전에는 둘 다 TOTAL_WAIT_NOTE 한 문장에 있었는데 바로 위
+    # 줄과 같은 말을 반복해 정작 지켜야 할 경고가 묻혔다.
+    # **가정 번호가 아니라 뜻이 화면에 있는지를 본다.** 「(A-19)」 는 08.12 에
+    # 뗐다 — 화면은 실무자가 보는 자리이고 번호는 문서·코드에 남아 추적이
+    # 끊기지 않는다. 지켜야 할 것은 **문장이 숫자를 따라다니는 것**이다.
+    shown = "".join(_shown_strings("sim_total_wait"))
+    assert "매칭을 재현하지 않아 짧다" in shown, "매칭 미재현 단서가 화면에 없다"
+    assert "실측" in shown, "대비 근거가 화면에 없다"
+    assert "후보 간 비교" in D.TOTAL_WAIT_NOTE, "인용 경고가 사라졌다"
+    assert D.TOTAL_WAIT_NOTE not in D.TOTAL_WAIT_HELP, "경고를 툴팁으로 옮겼다"
     # 물음표에는 정의와 "정렬 기준은 픽업"만 들어간다
     assert "픽업" in D.TOTAL_WAIT_HELP
 
@@ -476,21 +516,116 @@ def test_total_wait_caveat_is_on_screen_not_in_the_tooltip():
     assert 'title="{TOTAL_WAIT_HELP}"' in body or "TOTAL_WAIT_HELP" in body
 
 
-def test_total_wait_is_not_a_fifth_metric_card():
-    """카드로 만들지 않는다 — 판정 지표 넷과 같은 무게로 읽힌다.
+def test_total_wait_is_not_a_metric_card():
+    """카드로 만들지 않는다 — 판정 지표와 같은 무게로 읽힌다.
 
     이 값은 순위 기준이 아니다. 목록 정렬도 분포 패널도 픽업 그대로다
-    (docs/model_flow.md 「총 대기도 함께 재되 참고 열이다」).
+    (docs/evaluation.md 「총 대기도 함께 재되 참고 열이다」).
     """
     src = Path(D.__file__).read_text(encoding="utf-8")
     body = src.split("def sim_total_wait", 1)[1].split("\ndef ", 1)[0]
     assert ".metric(" not in body, "총 대기를 st.metric 으로 냈다"
-    assert 'class="tag"' in body, "「참고」 꼬리표가 없다"
+    # 「참고」 배지는 08.12 에 뗐다. 순위 기준이 아니라는 것은 이제 아래 두 줄과
+    # 물음표가 말한다 — **그 말이 화면에 남아 있는지**로 본다.
+    shown = "".join(_shown_strings("sim_total_wait"))
+    assert "인용하지 말고" in shown or "인용" in D.TOTAL_WAIT_NOTE, \
+        "이 값이 인용 대상이 아니라는 말이 화면에서 사라졌다"
+    assert "정렬" in D.TOTAL_WAIT_HELP or "픽업" in D.TOTAL_WAIT_HELP, \
+        "순위 기준이 픽업이라는 안내가 없다"
 
     # 정렬·분포는 픽업 열만 본다
     for fn in ("candidate_options", "distribution_panel"):
         fbody = src.split(f"def {fn}", 1)[1].split("\ndef ", 1)[0]
         assert "rate_total" not in fbody, f"{fn} 이 총 대기를 기준으로 쓴다"
+
+
+def test_before_after_is_not_shown_twice():
+    """`before → after` 는 대비 블록에만 둔다 — 카드 넷째를 뺐다 (08.12).
+
+    같은 숫자가 카드와 블록에 두 번 뜨면 블록의 대비 효과가 약해진다.
+    before/after 는 픽업과 총 대기를 나란히 놓을 때 의미가 있는 값이라
+    그쪽이 담당한다. 판정 카드는 셋(개선율 · 대비 구간 · 총절감)이다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
+    assert "st.columns(3)" in body, "판정 카드가 셋이 아니다"
+
+    # **화면에 나가는 문자열만 본다.** 주석은 카드를 왜 뺐는지 적는 자리라 옛
+    # 라벨을 인용할 수밖에 없다 — 본문 검색으로 찾으면 그 인용이 걸린다.
+    shown = "".join(_shown_strings("render_sim_page"))
+    assert "before → after" not in shown, "카드에 before → after 가 남아 있다"
+    for label in ("픽업 개선율", "대비 구간", "총 절감"):
+        assert label in shown, f"판정 카드 「{label}」 이 사라졌다"
+
+
+def test_comparison_block_is_one_markdown_call_in_a_panel(monkeypatch):
+    """테두리 블록을 **한 번의 markdown** 으로 낸다 (명세 8절).
+
+    여는 태그만 따로 부르면 Streamlit 이 그 호출을 독립 요소로 감싸 빈 사각형이
+    생긴다. 안에 위젯이 없어야 묶을 수 있는데, σ 물음표는 위젯이 아니라 `title`
+    속성이라 문자열로 들어간다.
+
+    실측이 없어 개선율 한 줄로 돌아갈 때도 테두리는 같이 두른다 — 패널 안에서
+    이 블록만 테두리가 없으면 딸려 온 글로 보인다.
+    """
+    import pandas as pd
+    full = pd.Series({
+        "rate_total_pct": -10.99, "rate_total_sd": 1.31,
+        "before": 13.17, "after": 12.04, "rate_pct": -8.57,
+        "before_total": 18.67, "after_total": 16.62,
+        "obs_total_min": 42.27, "sim_obs_ratio": 0.44})
+    thin = full.copy()
+    thin["obs_total_min"] = float("nan")
+
+    for name, row in (("분+실측", full), ("개선율만", thin)):
+        calls = []
+        monkeypatch.setattr(D.st, "markdown", lambda *a, **k: calls.append(a[0]))
+        D.sim_total_wait(row)
+        assert len(calls) == 1, f"{name}: markdown 을 {len(calls)}번 불렀다"
+        html = calls[0]
+        assert html.startswith('<div class="panel">'), f"{name}: 테두리가 없다"
+        assert html.count("<div") == html.count("</div>"), \
+            f"{name}: div 가 짝이 안 맞아 빈 사각형이 생긴다"
+        # 위젯이 아니라 title 속성으로 들어가야 한 덩이로 묶인다
+        assert "qmark" in html and "title=" in html
+
+
+def test_comparison_block_sits_in_the_right_panel():
+    """대비 블록은 **우측 패널**에서 지도 옆에 선다 (08.12).
+
+    본문에 두면 전체 폭을 쓰면서 지도를 아래로 밀어 결과와 지도를 한눈에 볼 수
+    없다. 패널 순서는 대비 블록 → 담당 동 → 경고다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
+    head, panel = body.split("with right:", 1)
+    assert "sim_total_wait(row)" not in head, "대비 블록이 아직 본문에 있다"
+    for fn in ("sim_total_wait", "sim_dong_panel", "sim_warnings"):
+        assert f"{fn}(" in panel, f"{fn} 이 우측 패널에 없다"
+    order = [panel.index(f"{fn}(") for fn in
+             ("sim_total_wait", "sim_dong_panel", "sim_warnings")]
+    assert order == sorted(order), "패널 순서가 블록 → 담당 동 → 경고 가 아니다"
+
+
+def test_comparison_block_keeps_its_columns_when_narrow():
+    """좁은 폭에서도 두 값 줄이 같은 격자에 선다 — 정렬이 이 블록의 전부다.
+
+    값 칸은 줄바꿈을 막고(`nowrap`), 자리가 모자라면 줄을 깨는 대신 글자를
+    줄인다. σ·실측 줄만 격자 전체를 써서 아래로 흐른다.
+    """
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    css = src.split(".wcmp", 1)[1].split("/* 물음표", 1)[0]
+    assert "white-space: nowrap" in css, "값 칸이 꺾일 수 있다"
+    assert "tabular-nums" in css, "자릿수 폭이 고정되지 않는다"
+    assert "grid-column: 1 / -1" in css, "σ·실측 줄이 격자 전체를 쓰지 않는다"
+    assert "@media" in css and "font-size" in css, "좁은 폭 대비가 없다"
+    # 값이 라벨보다 커야 위계가 산다 — 좁은 폭으로 줄어든 뒤에도 그렇다
+    import re
+    sizes = [float(m) for m in re.findall(r"font-size: ([\d.]+)rem", css)]
+    assert sizes, "글자 크기가 지정돼 있지 않다"
+    # 지도와 패널 비율 — 좁히면 값 줄이 꺾인다
+    body = src.split("def render_sim_page", 1)[1].split("\ndef ", 1)[0]
+    assert "st.columns([2, 1]" in body, "패널이 좁아져 정렬이 무너진다"
 
 
 def test_total_wait_row_is_silent_without_data(monkeypatch):

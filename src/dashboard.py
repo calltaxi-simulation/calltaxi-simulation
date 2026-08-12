@@ -105,13 +105,24 @@ BIAS_NOTE = ("절감폭의 절대 크기는 양방향 편의를 안고 있다. �
              "쪽이다. 두 편의가 상쇄되는 크기를 알 수 없으므로 절대값을 인용하지 "
              "말고 후보 간 비교로만 읽는다.")
 
-# 총 대기(접수 → 승차) — **개선율로만 낸다.** 분 단위를 보이면 실측과 견주게
-# 되는데, 시뮬 총 대기 before 가 실측의 0.33~0.44배다(매칭 미재현 · A-19).
+# 총 대기(접수 → 승차) — **분 단위를 낸다**(08.12 개정). 예전에는 개선율만 냈다.
+# 분을 보이면 진단 화면의 실측 대기와 견주게 된다는 이유였는데, **그 대비가 바로
+# 이 블록의 목적이다** — 시뮬 총 대기 before 가 실측의 0.30~0.49배라는 사실이
+# 매칭 미재현(A-19)의 증거이고, 그것이 채점 지표를 픽업으로 옮긴 근거다.
+# 숨기면 근거가 화면에서 사라지고 "왜 픽업으로 재나"가 문서에만 남는다.
+#
+# **그래서 실측을 반드시 같은 자리에 낸다**(`obs_total_min`). 분만 내고 실측을
+# 빼면 옛 걱정이 그대로 살아난다 — 값이 서울 평균 42.7분과 곧장 견줘진다.
+# 실측이 없는 행은 분을 내지 않고 개선율로 돌아간다(`sim_total_wait`).
+#
 # 이 문장은 툴팁이 아니라 값 옆에 그대로 적는다 — **툴팁은 부연을 접는 자리이지
 # 근거를 옮겨 놓는 자리가 아니다**(명세 3절). 숫자를 인용할 때 반드시 따라가야
 # 하는 말이므로 접으면 안 된다.
-TOTAL_WAIT_NOTE = ("시뮬은 매칭을 재현하지 못해 총 대기 절대값이 실측보다 "
-                   "짧습니다(A-19). 후보 간 비교로 읽으십시오.")
+#
+# **바로 위 실측 대비 줄과 겹치지 않게 줄였다**(08.12). "매칭을 재현하지 못해
+# 짧다"는 그 줄이 이미 수치와 함께 말한다 — 같은 말을 두 번 하면 아래 문장이
+# 읽히지 않고, 그러면 정작 지켜야 할 「인용하지 말라」가 묻힌다.
+TOTAL_WAIT_NOTE = "절대값을 인용하지 말고 후보 간 비교로 읽으십시오."
 # 물음표로 접는 쪽 — 두 지표가 무엇인지, 그리고 **순위 기준은 픽업 그대로**라는 것.
 # 총 대기 개선율이 픽업보다 크게 나오므로(1.3~2.2배) 정렬이 그쪽으로 바뀐 게
 # 아니냐는 물음이 생긴다. 기준을 옮기지 않은 이유는 model_flow 에 있다.
@@ -262,14 +273,18 @@ def load_placement() -> pd.DataFrame:
     화면에서 안 쓰는 것으로 충분하지 않다 — 열이 남아 있으면 다음 사람이
     집어 쓴다. 여기서 자르면 3페이지 코드가 등급에 손댈 방법이 없다.
 
-    **총 대기 2열(`rate_total_pct`·`rate_total_sd`)은 자르지 않는다.** 참고
-    지표지만 화면이 쓴다 — 등급과 성격이 다르다. 등급은 판단을 대신하는 표시라
-    잘라냈고, 이쪽은 「참고」 꼬리표를 달고 보여주는 값이다(`sim_total_wait`).
+    **총 대기 열은 자르지 않는다.** 참고 지표지만 화면이 쓴다 — 등급과 성격이
+    다르다. 등급은 판단을 대신하는 표시라 잘라냈고, 이쪽은 「참고」 꼬리표를 달고
+    보여주는 값이다(`sim_total_wait`).
+
+    분 단위 3열(`before_total`·`after_total`·`obs_total_min`)도 그대로 둔다 —
+    실측과의 대비가 「왜 픽업으로 재는가」의 근거라 화면이 쓴다(08.12 개정).
 
     반환: cand_id, cand_name, gu, dongs, n_dong_scope, n_calls_scope,
           before, delta, rate_pct, rate_sd, rate_lo, rate_hi, interval,
           sample_ok, total_delta_min, n_overlap, rate_total_pct,
-          rate_total_sd (+ after 파생)
+          rate_total_sd, before_total, after_total, obs_total_min,
+          sim_obs_ratio (+ after 파생)
     """
     path = OUTPUTS / "placement_grades.csv"
     if not path.exists():
@@ -1049,7 +1064,7 @@ CSS = f"""
   .premise b {{ color: {INK}; font-weight: 620; }}
 
   /* 참고 지표 — 결과 카드와 전제 사이 한 줄. 카드로 만들지 않는다: st.metric
-     다섯 번째가 되면 판정 지표와 같은 무게로 읽히는데, 이 값은 순위 기준이
+     한 장 더가 되면 판정 지표와 같은 무게로 읽히는데, 이 값은 순위 기준이
      아니다(순위는 픽업 그대로). 카드보다 낮고 `.note` 보다는 높은 층에 둔다. */
   .aux {{ font-size: .78rem; line-height: 1.55; color: #55524C;
           margin: .35rem 0 .1rem; }}
@@ -1061,6 +1076,57 @@ CSS = f"""
           color: #7A766E; background: #EDEBE6; border: 1px solid #E0DCD5;
           border-radius: 3px; padding: .04rem .28rem; margin-right: .35rem;
           vertical-align: .06em; letter-spacing: .02em; }}
+
+  /* 픽업 · 총 대기 대비 — 두 줄을 같은 격자에 세운다. 화살표와 괄호가 세로로
+     맞아야 "같은 것을 두 자로 잰 값"으로 읽힌다. 줄이 어긋나면 별개 지표 두 개로
+     보이고, 그러면 이 블록의 목적(왜 픽업으로 재는가)이 전달되지 않는다.
+
+     **우측 패널(좁은 폭)에 선다**(08.12). 값 칸을 3개로 줄이고 σ·실측 줄은
+     격자 전체를 쓰게 해서, 폭이 모자라면 **아래로** 흐르되 두 값 줄은 끝까지
+     같은 칸에 서게 했다. 세 칸은 `nowrap` 이라 값 중간에서 꺾이지 않는다 —
+     "18.67 → 16.62분" 이 반으로 갈리면 정렬이 무너진다.
+
+     정렬이 버티는 근거는 `tabular-nums` 다. 두 줄 모두 `NN.NN → NN.NN분` 로
+     자릿수가 같아 폭이 같아진다. 개선율은 자릿수가 달라(−8.57 / −10.99) 별도
+     칸으로 뽑아야 왼쪽 끝이 맞는다. */
+  /* 이 블록이 우측 패널의 머리다 — 「담당 동」의 동 이름·콜 수(`.mvalue` .95rem)
+     보다 작으면 딸려 온 글로 읽힌다. 그래서 **라벨을 그 크기(.95rem)에 맞추고
+     값은 한 단계 위(1.1rem)** 로 올린다. 값이 라벨보다 큰 것이 위계다.
+     개선율은 값과 같은 크기로 두되 굵기를 낮춰 before→after 가 먼저 눈에 들게
+     했다. 아래 두 줄(실측 대비 · 인용 경고)은 근거라 본문 크기 그대로다.
+
+     칸은 셋이다. 「참고」 배지를 떼면서 넷째 칸이 사라졌고, 그만큼 값 칸에
+     자리가 돌아와 글자를 키울 수 있었다. */
+  .wcmp {{ font-size: .95rem; line-height: 1.5; color: #55524C;
+           margin: 0 0 .15rem; display: grid;
+           grid-template-columns: auto auto auto;
+           gap: .1rem .45rem; align-items: baseline;
+           justify-content: start; }}
+  .wcmp .wlab {{ color: #6E6A62; white-space: nowrap; }}
+  .wcmp .wval {{ color: {INK}; font-weight: 640; white-space: nowrap;
+                 font-size: 1.1rem; font-variant-numeric: tabular-nums; }}
+  .wcmp .wrate {{ font-size: 1.1rem; font-weight: 500; white-space: nowrap;
+                  font-variant-numeric: tabular-nums; }}
+  /* σ·물음표 — 값 줄에 붙이면 좁은 폭에서 값을 밀어낸다. 아래로 내린다. */
+  .wcmp .wmeta {{ grid-column: 1 / -1; color: #949087; font-size: .74rem;
+                  font-variant-numeric: tabular-nums; }}
+  /* 실측 대비 줄 — 격자 전체를 쓰고 한 칸 들여쓴다. 위 두 줄의 근거이지
+     별개 항목이 아니라는 것을 들여쓰기로 말한다. 좁은 폭에서는 접히므로
+     들여쓴 만큼 매달아(hanging indent) 이어지는 줄도 왼쪽이 맞게 둔다. */
+  .wcmp .wfoot {{ grid-column: 1 / -1; color: #7A766E; font-size: .78rem;
+                  line-height: 1.5; margin-top: .1rem;
+                  padding-left: .85rem; text-indent: -.85rem; }}
+  .wcmp .wfoot b {{ color: #55524C; font-weight: 620;
+                    font-variant-numeric: tabular-nums; }}
+  /* 창이 좁으면 패널도 좁아진다. 값 칸이 `nowrap` 이라 자리가 모자라면 넘치므로
+     **줄을 깨는 대신 글자를 줄인다** — 두 줄이 같은 칸에 서는 것이 이 블록의
+     전부라 그것만은 어느 폭에서도 지킨다. 위계(값 > 라벨)는 줄어든 뒤에도
+     유지한다. */
+  @media (max-width: 1150px) {{
+    .wcmp {{ font-size: .85rem; column-gap: .32rem; }}
+    .wcmp .wval, .wcmp .wrate {{ font-size: .98rem; }}
+    .wcmp .wfoot {{ font-size: .74rem; }}
+  }}
 
   /* 물음표 — st.metric 의 `help` 아이콘과 같은 성격이다. 별도 요소를 만들지
      않으려고 `title` 툴팁을 쓴다(전제 블록을 한 번의 markdown 으로 내야 한다). */
@@ -1633,15 +1699,40 @@ def sim_scenario(row) -> None:
 
 
 def sim_total_wait(row) -> None:
-    """총 대기 개선율 — **참고.** 픽업 개선율 카드 바로 아래 한 줄.
+    """픽업 · 총 대기 대비 — **참고.** 우측 패널 맨 위, 지도 옆에 선다.
 
-    **왜 카드가 아닌가.** `st.metric` 다섯 번째로 두면 판정 지표 넷과 같은 무게로
+    **본문에서 패널로 옮겼다**(08.12). 카드 아래 본문에 있을 때는 전체 폭을
+    썼지만, 지도가 그 아래로 밀려 결과와 지도를 한눈에 못 봤다. 패널로 오면서
+    지도와 나란히 서고 본문은 카드 → 전제 → 지도로 짧아졌다.
+
+    좁은 폭에서 두 줄의 세로 정렬이 무너지면 별개 지표 두 개로 읽혀 대비가
+    죽는다. 그래서 값 칸을 셋으로 줄이고 σ·실측 줄을 아래로 내렸다(CSS `.wcmp`).
+
+    **테두리 있는 패널이다** — 「담당 동」과 같은 층이라 같은 모양이어야 패널
+    안에서 딸려 온 글로 보이지 않는다. 안에 위젯이 없어(σ 물음표도 `title`
+    속성이다) **한 번의 markdown 으로** 낼 수 있다(명세 8절).
+
+    **「참고」 배지는 뗐다**(08.12). 이 블록이 순위 기준이 아니라는 것은 이제
+    아래 두 줄(실측 대비 · 인용 경고)과 물음표가 말한다 — 목록 정렬·분포·등급이
+    픽업 그대로인 것은 코드에서 그대로다. 배지가 빠지면서 넷째 칸이 사라져
+    값 칸에 자리가 돌아왔고, 그만큼 글자를 키울 수 있었다.
+
+    **왜 카드가 아닌가.** `st.metric` 을 한 장 더 두면 판정 지표 셋과 같은 무게로
     읽히는데, 이 값은 순위 기준이 아니다 — 목록 정렬도 분포도 픽업 그대로다.
     성격이 다른 것을 같은 모양으로 두면 화면이 "이것도 기준"이라고 말하게 된다.
 
-    **개선율(%)만 낸다.** before/after 를 분으로 적으면 실무자가 진단 화면의 실측
-    대기와 견주는데, 시뮬 총 대기 before 는 실측의 0.33~0.44배다(매칭 미재현 ·
-    A-19). 그 비교는 성립하지 않는다. 원값(분)은 `placement_eval.csv` 에만 둔다.
+    **픽업 before/after 도 이 블록이 담당한다**(08.12). 카드 넷째로 있던 것을
+    뺐다 — 같은 숫자가 두 번 뜨면 대비가 약해진다.
+
+    **분 단위를 픽업과 나란히 낸다**(08.12 개정). 예전에는 개선율만 냈다 — 분을
+    보이면 진단 화면 실측과 견줘진다는 이유였는데, **그 대비가 이 블록의 목적**이다.
+    시뮬 총 대기 before 가 실측의 0.30~0.49배라는 것이 매칭 미재현(A-19)의 증거고,
+    그것이 채점 지표를 픽업으로 옮긴 근거다. 두 줄을 세로로 맞춰 세우면 "왜 픽업
+    으로 재는가"가 문서가 아니라 화면에서 보인다.
+
+    **실측(`obs_total_min`)이 없으면 분을 내지 않는다.** 분만 있고 실측이 없으면
+    옛 걱정이 그대로 살아난다 — 값이 서울 평균 42.7분과 곧장 견줘진다. 두 값은
+    짝이라 하나만 내면 안 된다. 실측이 비면 개선율 한 줄로 돌아간다.
 
     **그런데도 왜 보이는가.** 픽업만 보이면 "그래서 이용자 체감은 얼마나
     줄어드나"에 답이 없다. 총 대기가 이용자가 실제로 겪는 시간이고, 후보 간
@@ -1657,11 +1748,54 @@ def sim_total_wait(row) -> None:
     sd = row.get("rate_total_sd")
     spread = ("" if sd is None or pd.isna(sd)
               else f'<span class="dim"> · 시드 간 σ {sd:.2f}%p</span>')
+
+    obs = row.get("obs_total_min")
+    bt, at = row.get("before_total"), row.get("after_total")
+    minutes_ok = all(v is not None and pd.notna(v) for v in (obs, bt, at))
+
+    if not minutes_ok:
+        # 실측이나 분이 없으면 옛 형태 — 개선율 한 줄. 한 줄뿐이라 정렬 문제가
+        # 없으므로 꼬리표는 원래대로 값 앞이다. 테두리는 같이 두른다 — 패널
+        # 안에서 이 블록만 테두리가 없으면 딸려 온 글로 보인다.
+        st.markdown(
+            '<div class="panel"><div class="aux">'
+            f'총 대기 개선율 <b>{rate:+.2f}%</b>{spread}'
+            f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span>'
+            + note_html(TOTAL_WAIT_NOTE)
+            + '</div></div>', unsafe_allow_html=True)
+        return
+
+    ratio = row.get("sim_obs_ratio")
+    ratio_txt = ("." if ratio is None or pd.isna(ratio)
+                 else f' — 시뮬은 그 <b>{ratio:.2f}배</b>다.')
+    # 제 줄에 서므로 앞의 가운뎃점을 뗀다 — `spread` 는 개선율 한 줄로
+    # 돌아갈 때(실측 없음) 값 뒤에 이어 붙는 형태라 그쪽은 점이 필요하다.
+    meta = "" if sd is None or pd.isna(sd) else f'시드 간 σ {sd:.2f}%p'
+    # **패널은 한 번의 markdown 으로 낸다**(명세 8절). 여는 태그만 따로 부르면
+    # Streamlit 이 그 호출을 독립 요소로 감싸 빈 사각형을 만든다. 여기 들어가는
+    # 것이 전부 문자열이라(σ 물음표도 위젯이 아니라 `title` 속성이다) 한 덩이로
+    # 묶을 수 있다 — 위젯이 끼면 테두리를 두르지 못한다.
     st.markdown(
-        '<div class="aux">'
-        '<span class="tag">참고</span>'
-        f'총 대기 개선율 <b>{rate:+.2f}%</b>{spread}'
-        f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span>'
+        '<div class="panel">'
+        '<div class="wcmp">'
+        # 픽업 — 판정 지표. 먼저 온다.
+        '<span class="wlab">픽업</span>'
+        f'<span class="wval">{row["before"]:.2f} → {row["after"]:.2f}분</span>'
+        f'<span class="wrate">({row["rate_pct"]:+.2f}%)</span>'
+        # 총 대기 — 라벨은 이것 하나다. 「참고」 배지를 뗐다(08.12). 성격은
+        # 아래 두 줄(실측 대비 · 인용 경고)과 물음표가 말한다. 배지가 빠지면서
+        # 넷째 칸이 사라져 값 칸에 자리가 돌아왔다.
+        '<span class="wlab">총 대기</span>'
+        f'<span class="wval">{bt:.2f} → {at:.2f}분</span>'
+        f'<span class="wrate">({rate:+.2f}%)</span>'
+        f'<span class="wmeta">{meta}'
+        f'<span class="qmark" title="{TOTAL_WAIT_HELP}">?</span></span>'
+        # 실측 대비 — 위 두 줄의 근거. 가정 번호(A-19)는 뗐다 — 화면은 실무자가
+        # 보는 자리이고, 「매칭을 재현하지 않아 짧다」가 그 자체로 뜻이 통한다.
+        # 번호는 문서와 코드에 남아 있으므로 추적은 끊기지 않는다.
+        f'<span class="wfoot">└ 같은 범위 실측 <b>{obs:.1f}분</b>{ratio_txt}'
+        ' 매칭을 재현하지 않아 짧다</span>'
+        '</div>'
         + note_html(TOTAL_WAIT_NOTE)
         + '</div>', unsafe_allow_html=True)
 
@@ -1737,7 +1871,11 @@ def render_sim_page() -> None:
         f'동 {int(row["n_dong_scope"])}개 · '
         f'총절감 {row["total_delta_min"]:,.0f}분</div>', unsafe_allow_html=True)
 
-    m1, m2, m3, m4 = st.columns(4)
+    # **카드는 셋이다**(08.12). 넷째로 「픽업 before → after」 가 있었는데 아래
+    # 대비 블록이 같은 숫자를 다시 낸다. 같은 값이 두 번 뜨면 블록의 대비 효과가
+    # 약해진다 — before/after 는 두 자를 나란히 놓을 때 의미가 있는 값이라
+    # 그쪽에 맡기고, 카드는 판정 지표 셋만 남긴다.
+    m1, m2, m3 = st.columns(3)
     m1.metric("픽업 개선율", f"{row['rate_pct']:+.2f}%",
               help="3km 안 동네들의 대기가 평균 몇 % 줄어드는지. "
                    "콜이 많은 동에 더 무게를 둡니다.")
@@ -1745,18 +1883,21 @@ def render_sim_page() -> None:
               help="시뮬을 세 번 돌렸을 때 값이 흔들린 폭.")
     m3.metric("총 절감", f"{row['total_delta_min']:,.0f}분",
               help="3km 안에서 줄어든 대기 시간을 전부 더한 값. 한 달 기준입니다.")
-    m4.metric("픽업 before → after",
-              f"{row['before']:.2f} → {row['after']:.2f}분")
-
-    # 참고 지표는 판정 지표 **아래** 한 줄이다. 카드로 만들지 않는 이유는
-    # `sim_total_wait` 주석 참조 — 순위 기준은 픽업 그대로다.
-    sim_total_wait(row)
 
     # **전제는 결과 바로 뒤, 지도보다 앞이다.** 아래 경고들과 같은 층에 두면 늦다.
-    # 참고 행보다도 뒤인 것은, 전제("10대 증차")가 그 행에도 걸리기 때문이다.
+    # 대비 블록(`sim_total_wait`)이 우측 패널로 가면서 이 자리가 카드 바로
+    # 다음이 됐다 — 전제는 카드에도 블록에도 걸리므로 둘보다 위에 온다.
     sim_scenario(row)
 
-    left, right = st.columns([4, 1], gap="medium")
+    # 지도 : 패널 = 4:1 → 3:1 → **2:1**. 대비 블록이 패널로 오면서 한 번,
+    # 블록 글자를 「담당 동」 크기로 올리면서 또 한 번 넓혔다.
+    #
+    # **글자를 키우면 폭이 따라와야 한다.** 값 줄이 "18.67 → 16.62분 (−10.99%)
+    # [참고]" 인데 값을 .95rem 으로 올리면 약 300px 이 든다. 3:1 은 패널 안쪽이
+    # 약 264px 이라 배지가 아래로 접혔고, 접히면 그 줄만 높아져 두 줄의 정렬이
+    # 깨진다 — 정렬이 이 블록의 전부다. 2:1 이면 안쪽이 약 363px 로 여유가 있다.
+    # 지도는 단계구분도라 폭이 줄어도 읽는 데 지장이 없다.
+    left, right = st.columns([2, 1], gap="medium")
 
     with left:
         sc = placement_scope().get(int(row["cand_id"]), {})
@@ -1779,6 +1920,11 @@ def render_sim_page() -> None:
             ss.page = 2 if ss.selected else 1
             st.rerun()
 
+        # 패널 순서: 대비 블록 → 담당 동 → 경고(있을 때만).
+        # **블록이 맨 위인 이유** — 지도와 나란히 서는 값이라 지도를 보며
+        # 눈을 옮기는 거리가 짧아야 한다. 담당 동은 지도의 범례에 가깝고,
+        # 경고는 있을 때만 뜨므로 맨 아래여야 순서가 흔들리지 않는다.
+        sim_total_wait(row)
         sim_dong_panel(int(row["cand_id"]), row)
         sim_warnings(row)
 
